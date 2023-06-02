@@ -18,9 +18,12 @@
 
 typedef uint8_t u8;
 typedef uint32_t u32;
+typedef int32_t s32;
 
 global int win32_global_dpi = WIN32_DEFAULT_DPI;
 global bool win32_global_is_running;
+global BITMAPINFO *win32_global_bitmap_info;
+global struct render_bitmap *win32_global_bitmap;
 
 function void platform_log(char *format, ...)
 {
@@ -172,6 +175,75 @@ function int win32_get_window_dpi(HWND window)
    return(result);
 }
 
+struct render_bitmap
+{
+   u32 width;
+   u32 height;
+
+   u32 *memory;
+};
+
+function void win32_display_bitmap(struct render_bitmap bitmap, HWND window, HDC device_context)
+{
+   RECT client_rect;
+   GetClientRect(window, &client_rect);
+
+   s32 client_width = client_rect.right - client_rect.left;
+   s32 client_height = client_rect.bottom - client_rect.top;
+
+   u32 toolbar_height = 0;
+   client_height -= toolbar_height;
+
+   u32 status_height = 0;
+   client_height -= status_height;
+
+   float client_aspect_ratio = (float)client_width / (float)client_height;
+   float target_aspect_ratio = (float)RESOLUTION_BASE_WIDTH / (float)RESOLUTION_BASE_HEIGHT;
+
+   float target_width  = (float)client_width;
+   float target_height = (float)client_height;
+   float gutter_width  = 0;
+   float gutter_height = 0;
+
+   if(client_aspect_ratio > target_aspect_ratio)
+   {
+      // NOTE(law): The window is too wide, fill in the left and right sides
+      // with black gutters.
+      target_width = target_aspect_ratio * client_height;
+      gutter_width = (client_width - target_width) / 2;
+   }
+   else if(client_aspect_ratio < target_aspect_ratio)
+   {
+      // NOTE(law): The window is too tall, fill in the top and bottom with
+      // black gutters.
+      target_height = (1.0f / target_aspect_ratio) * client_width;
+      gutter_height = (client_height - target_height) / 2;
+   }
+
+   if(client_aspect_ratio > target_aspect_ratio)
+   {
+      // NOTE(law): The window is too wide, fill in the left and right sides
+      // with black gutters.
+      PatBlt(device_context, 0, toolbar_height, (int)gutter_width, (int)target_height, BLACKNESS);
+      PatBlt(device_context, (int)(client_width - gutter_width), toolbar_height, (int)gutter_width, (int)target_height, BLACKNESS);
+   }
+   else if(client_aspect_ratio < target_aspect_ratio)
+   {
+      // NOTE(law): The window is too tall, fill in the top and bottom with
+      // black gutters.
+      PatBlt(device_context, 0, toolbar_height, (int)target_width, (int)gutter_height, BLACKNESS);
+      PatBlt(device_context, 0, toolbar_height + (int)(client_height - gutter_height), (int)target_width, (int)gutter_height, BLACKNESS);
+   }
+
+   int target_x = (int)gutter_width;
+   int target_y = (int)(gutter_height + toolbar_height);
+
+   StretchDIBits(device_context,
+                 target_x, target_y, (int)target_width, (int)target_height, // Destination
+                 0, 0, bitmap.width, bitmap.height, // Source
+                 bitmap.memory, win32_global_bitmap_info, DIB_RGB_COLORS, SRCCOPY);
+}
+
 LRESULT win32_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
    LRESULT result = 0;
@@ -229,6 +301,14 @@ LRESULT win32_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM l
          SetWindowPos(window, 0, x, y, width, height, SWP_NOZORDER|SWP_NOACTIVATE);
       } break;
 
+      case WM_PAINT:
+      {
+         PAINTSTRUCT paint;
+         HDC device_context = BeginPaint(window, &paint);
+         win32_display_bitmap(*win32_global_bitmap, window, device_context);
+         ReleaseDC(window, device_context);
+      } break;
+
       default:
       {
          result = DefWindowProc(window, message, wparam, lparam);
@@ -274,6 +354,39 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    {
       platform_log("ERROR: Failed to create a window.\n");
       return(1);
+   }
+
+   // NOTE(law) Set up the rendering bitmap.
+   struct render_bitmap bitmap = {RESOLUTION_BASE_WIDTH, RESOLUTION_BASE_HEIGHT};
+
+   SIZE_T bytes_per_pixel = sizeof(u32);
+   SIZE_T bitmap_size = bitmap.width * bitmap.height * bytes_per_pixel;
+   bitmap.memory = VirtualAlloc(0, bitmap_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+   if(!bitmap.memory)
+   {
+      platform_log("ERROR: Windows failed to allocate the render bitmap.\n");
+      return(1);
+   }
+
+   BITMAPINFOHEADER bitmap_header = {0};
+   bitmap_header.biSize = sizeof(BITMAPINFOHEADER);
+   bitmap_header.biWidth = bitmap.width;
+   bitmap_header.biHeight = (s32)bitmap.height; // NOTE(law): Negative will indicate a top-down bitmap.
+   bitmap_header.biPlanes = 1;
+   bitmap_header.biBitCount = 32;
+   bitmap_header.biCompression = BI_RGB;
+
+   BITMAPINFO bitmap_info = {bitmap_header};
+
+   win32_global_bitmap = &bitmap;
+   win32_global_bitmap_info = &bitmap_info;
+
+   for(u32 y = 0; y < bitmap.height; ++y)
+   {
+      for(u32 x = 0; x < bitmap.width; ++x)
+      {
+         bitmap.memory[(y * bitmap.width) + x] = 0xFF00FF00;
+      }
    }
 
    ShowWindow(window, show_command);
