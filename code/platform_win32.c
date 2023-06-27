@@ -3,29 +3,19 @@
 /* /////////////////////////////////////////////////////////////////////////// */
 
 #include <windows.h>
-#include <assert.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 
-#define function static
-#define global static
+#include "sokoban.c"
 
 #define WIN32_LOG_MAX_LENGTH 1024
 #define WIN32_DEFAULT_DPI 96
-#define RESOLUTION_BASE_WIDTH 320
-#define RESOLUTION_BASE_HEIGHT 320
-
-typedef uint8_t u8;
-typedef uint32_t u32;
-typedef int32_t s32;
 
 global int win32_global_dpi = WIN32_DEFAULT_DPI;
 global bool win32_global_is_running;
 global BITMAPINFO *win32_global_bitmap_info;
 global struct render_bitmap *win32_global_bitmap;
 
-function void platform_log(char *format, ...)
+function PLATFORM_LOG(platform_log)
 {
    char message[WIN32_LOG_MAX_LENGTH];
 
@@ -39,13 +29,7 @@ function void platform_log(char *format, ...)
    OutputDebugStringA(message);
 }
 
-struct platform_file
-{
-   size_t size;
-   u8 *memory;
-};
-
-function void platform_free_file(struct platform_file *file)
+function PLATFORM_FREE_FILE(platform_free_file)
 {
    if(file->memory)
    {
@@ -58,7 +42,7 @@ function void platform_free_file(struct platform_file *file)
    ZeroMemory(file, sizeof(*file));
 }
 
-function struct platform_file platform_load_file(char *file_path)
+function PLATFORM_LOAD_FILE(platform_load_file)
 {
    struct platform_file result = {0};
 
@@ -174,14 +158,6 @@ function int win32_get_window_dpi(HWND window)
 
    return(result);
 }
-
-struct render_bitmap
-{
-   u32 width;
-   u32 height;
-
-   u32 *memory;
-};
 
 function void win32_display_bitmap(struct render_bitmap bitmap, HWND window, HDC device_context)
 {
@@ -381,19 +357,10 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    win32_global_bitmap = &bitmap;
    win32_global_bitmap_info = &bitmap_info;
 
-   for(u32 y = 0; y < bitmap.height; ++y)
-   {
-      for(u32 x = 0; x < bitmap.width; ++x)
-      {
-         bitmap.memory[(y * bitmap.width) + x] = 0xFF00FF00;
-      }
-   }
-
    ShowWindow(window, show_command);
    UpdateWindow(window);
 
-   struct platform_file level_file = platform_load_file("../data/simple.sok");
-   platform_log("%.*s", level_file.size, level_file.memory);
+   struct game_state gs = {0};
 
    win32_global_is_running = true;
    while(win32_global_is_running)
@@ -404,6 +371,13 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          TranslateMessage(&message);
          DispatchMessage(&message);
       }
+
+      update(&gs, &bitmap);
+
+      // NOTE(law): Blit bitmap to screen.
+      HDC device_context = GetDC(window);
+      win32_display_bitmap(bitmap, window, device_context);
+      ReleaseDC(window, device_context);
    }
 
    return(0);
