@@ -348,27 +348,37 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
       switch(keycode)
       {
          case VK_UP:
+         case 'W':
          {
             input->move_up.is_pressed = key_is_pressed;
             input->move_up.changed_state = key_changed_state;
          } break;
 
          case VK_DOWN:
+         case 'S':
          {
             input->move_down.is_pressed = key_is_pressed;
             input->move_down.changed_state = key_changed_state;
          } break;
 
          case VK_LEFT:
+         case 'A':
          {
             input->move_left.is_pressed = key_is_pressed;
             input->move_left.changed_state = key_changed_state;
          } break;
 
          case VK_RIGHT:
+         case 'D':
          {
             input->move_right.is_pressed = key_is_pressed;
             input->move_right.changed_state = key_changed_state;
+         } break;
+
+         case 'U':
+         {
+            input->undo.is_pressed = key_is_pressed;
+            input->undo.changed_state = key_changed_state;
          } break;
 
          case VK_RETURN:
