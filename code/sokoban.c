@@ -44,6 +44,34 @@ struct render_bitmap
    u32 *memory;
 };
 
+struct game_input_button
+{
+   bool is_pressed;
+   bool changed_state;
+};
+
+struct game_input
+{
+   struct game_input_button move_up;
+   struct game_input_button move_down;
+   struct game_input_button move_left;
+   struct game_input_button move_right;
+};
+
+function bool is_pressed(struct game_input_button button)
+{
+   // NOTE(law): The specified button is currently pressed.
+   bool result = (button.is_pressed);
+   return(result);
+}
+
+function bool was_pressed(struct game_input_button button)
+{
+   // NOTE(law): The specified button was just pressed on this frame.
+   bool result = (button.is_pressed && button.changed_state);
+   return(result);
+}
+
 enum tile_type
 {
    TILE_TYPE_FLOOR,
@@ -155,6 +183,15 @@ function bool is_inconsequential_whitespace(char c)
 
 function void load_level(struct game_state *gs, char *file_path)
 {
+   // NOTE(law): Clear level contents.
+   for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
+   {
+      for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
+      {
+         gs->tiles[y][x] = 0;
+      }
+   }
+
    struct platform_file level_file = platform_load_file(file_path);
 
    size_t index = 0;
@@ -228,7 +265,53 @@ function void load_level(struct game_state *gs, char *file_path)
    platform_free_file(&level_file);
 }
 
-function void immediate_bitmap(struct render_bitmap destination, struct render_bitmap source, u32 posx, u32 posy)
+enum player_direction
+{
+   PLAYER_DIRECTION_UP,
+   PLAYER_DIRECTION_DOWN,
+   PLAYER_DIRECTION_LEFT,
+   PLAYER_DIRECTION_RIGHT,
+};
+
+function void move_player(struct game_state *gs, enum player_direction direction)
+{
+   // TODO(law): Store player position more intelligently.
+   for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
+   {
+      for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
+      {
+         enum tile_type type = gs->tiles[y][x];
+         if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
+         {
+            u32 destinationx = x;
+            u32 destinationy = y;
+            switch(direction)
+            {
+               case PLAYER_DIRECTION_UP:    {destinationy++;} break;
+               case PLAYER_DIRECTION_DOWN:  {destinationy--;} break;
+               case PLAYER_DIRECTION_LEFT:  {destinationx--;} break;
+               case PLAYER_DIRECTION_RIGHT: {destinationx++;} break;
+            }
+
+            if(destinationx >= 0 && destinationx < SCREEN_TILE_COUNT_X &&
+               destinationy >= 0 && destinationy < SCREEN_TILE_COUNT_Y)
+            {
+               // TODO(law): Handle box movement.
+               enum tile_type destination = gs->tiles[destinationy][destinationx];
+               if(destination == TILE_TYPE_FLOOR || destination == TILE_TYPE_GOAL)
+               {
+                  gs->tiles[y][x] = (type == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                  gs->tiles[destinationy][destinationx] = (destination == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+               }
+            }
+
+            return;
+         }
+      }
+   }
+}
+
+function void immediate_bitmap(struct render_bitmap *destination, struct render_bitmap source, u32 posx, u32 posy)
 {
    for(u32 y = 0; y < source.height; ++y)
    {
@@ -236,16 +319,16 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
       {
          u32 destinationx = posx + x;
          u32 destinationy = posy + y;
-         u32 destination_index = (destinationy * destination.width) + destinationx;
+         u32 destination_index = (destinationy * destination->width) + destinationx;
 
          u32 color = source.memory[(y * source.width) + x];
 
-         destination.memory[destination_index] = color;
+         destination->memory[destination_index] = color;
       }
    }
 }
 
-function void immediate_tile(struct render_bitmap destination, u32 posx, u32 posy, u32 color)
+function void immediate_tile(struct render_bitmap *destination, u32 posx, u32 posy, u32 color)
 {
    for(u32 y = 0; y < TILE_DIMENSION_PIXELS; ++y)
    {
@@ -253,18 +336,19 @@ function void immediate_tile(struct render_bitmap destination, u32 posx, u32 pos
       {
          u32 destinationx = posx + x;
          u32 destinationy = posy + y;
-         u32 destination_index = (destinationy * destination.width) + destinationx;
+         u32 destination_index = (destinationy * destination->width) + destinationx;
 
-         destination.memory[destination_index] = color;
+         destination->memory[destination_index] = color;
       }
    }
 }
 
-function void update(struct game_state *gs, struct render_bitmap *bitmap)
+function void update(struct game_state *gs, struct render_bitmap *bitmap, struct game_input *input)
 {
    if(!gs->is_initialized)
    {
-      load_level(gs, "../data/simple.sok");
+      load_level(gs, "../data/levels/simple.sok");
+      load_level(gs, "../data/levels/empty_section.sok");
 
       gs->player = load_bitmap(&gs->arena, "../data/player.bmp");
       gs->box    = load_bitmap(&gs->arena, "../data/box.bmp");
@@ -275,6 +359,25 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap)
       gs->is_initialized = true;
    }
 
+   // NOTE(law): Process player input.
+   if(was_pressed(input->move_up))
+   {
+      move_player(gs, PLAYER_DIRECTION_UP);
+   }
+   else if(was_pressed(input->move_down))
+   {
+      move_player(gs, PLAYER_DIRECTION_DOWN);
+   }
+   else if(was_pressed(input->move_left))
+   {
+      move_player(gs, PLAYER_DIRECTION_LEFT);
+   }
+   else if(was_pressed(input->move_right))
+   {
+      move_player(gs, PLAYER_DIRECTION_RIGHT);
+   }
+
+   // NOTE(law): Render tiles.
    for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
    {
       for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
@@ -288,37 +391,29 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap)
          {
             case TILE_TYPE_FLOOR:
             {
-               immediate_bitmap(*bitmap, gs->floor, x, y);
+               immediate_bitmap(bitmap, gs->floor, x, y);
             } break;
 
             case TILE_TYPE_PLAYER:
-            {
-               immediate_bitmap(*bitmap, gs->player, x, y);
-            } break;
-
             case TILE_TYPE_PLAYER_ON_GOAL:
             {
-               immediate_tile(*bitmap, x, y, 0xFFFF3333);
+               immediate_bitmap(bitmap, gs->player, x, y);
             } break;
 
             case TILE_TYPE_BOX:
-            {
-               immediate_bitmap(*bitmap, gs->box, x, y);
-            } break;
-
             case TILE_TYPE_BOX_ON_GOAL:
             {
-               immediate_bitmap(*bitmap, gs->box, x, y);
+               immediate_bitmap(bitmap, gs->box, x, y);
             } break;
 
             case TILE_TYPE_WALL:
             {
-               immediate_bitmap(*bitmap, gs->wall, x, y);
+               immediate_bitmap(bitmap, gs->wall, x, y);
             } break;
 
             case TILE_TYPE_GOAL:
             {
-               immediate_bitmap(*bitmap, gs->goal, x, y);
+               immediate_bitmap(bitmap, gs->goal, x, y);
             } break;
 
             default:

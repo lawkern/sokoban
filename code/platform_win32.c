@@ -294,6 +294,51 @@ LRESULT win32_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM l
    return(result);
 }
 
+function bool win32_process_keyboard(MSG message, struct game_input *input)
+{
+   bool result = false;
+
+   if(message.message == WM_KEYDOWN || message.message == WM_KEYUP ||
+      message.message == WM_SYSKEYDOWN || message.message == WM_SYSKEYUP)
+   {
+      u32 keycode = (u32)message.wParam;
+
+      u32 previous_state = (message.lParam >> 30) & 1;
+      u32 transition_state = (message.lParam >> 31) & 1;
+
+      switch(keycode)
+      {
+         case VK_UP:
+         {
+            input->move_up.is_pressed = !transition_state;
+            input->move_up.changed_state = (previous_state == transition_state);
+         } break;
+
+         case VK_DOWN:
+         {
+            input->move_down.is_pressed = !transition_state;
+            input->move_down.changed_state = (previous_state == transition_state);
+         } break;
+
+         case VK_LEFT:
+         {
+            input->move_left.is_pressed = !transition_state;
+            input->move_left.changed_state = (previous_state == transition_state);
+         } break;
+
+         case VK_RIGHT:
+         {
+            input->move_right.is_pressed = !transition_state;
+            input->move_right.changed_state = (previous_state == transition_state);
+         } break;
+      }
+
+      result = true;
+   }
+
+   return(result);
+}
+
 int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line, int show_command)
 {
    WNDCLASSEX window_class = {0};
@@ -364,17 +409,26 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    gs.arena.size = 64 * 1024 * 1024;
    gs.arena.base_address = VirtualAlloc(0, gs.arena.size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
 
+   struct game_input input = {0};
+
    win32_global_is_running = true;
    while(win32_global_is_running)
    {
+      ZeroMemory(&input, sizeof(input));
+
       MSG message;
       while(PeekMessage(&message, 0, 0, 0, PM_REMOVE))
       {
+         if(win32_process_keyboard(message, &input))
+         {
+            continue;
+         }
+
          TranslateMessage(&message);
          DispatchMessage(&message);
       }
 
-      update(&gs, &bitmap);
+      update(&gs, &bitmap, &input);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);
