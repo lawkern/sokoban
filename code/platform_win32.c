@@ -14,6 +14,10 @@ global int win32_global_dpi = WIN32_DEFAULT_DPI;
 global bool win32_global_is_running;
 global BITMAPINFO *win32_global_bitmap_info;
 global struct render_bitmap *win32_global_bitmap;
+global WINDOWPLACEMENT win32_global_previous_window_placement =
+{
+   sizeof(win32_global_previous_window_placement)
+};
 
 function PLATFORM_LOG(platform_log)
 {
@@ -89,6 +93,37 @@ function bool win32_is_fullscreen(HWND window)
 
    bool result = !(style & WS_OVERLAPPEDWINDOW);
    return(result);
+}
+
+function void win32_toggle_fullscreen(HWND window)
+{
+   // NOTE(law): Based on version by Raymond Chen:
+   // https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
+
+   // TODO(law): Check what this does with multiple monitors.
+   DWORD style = GetWindowLong(window, GWL_STYLE);
+   if(style & WS_OVERLAPPEDWINDOW)
+   {
+      MONITORINFO monitor_info = {sizeof(monitor_info)};
+
+      if(GetWindowPlacement(window, &win32_global_previous_window_placement) &&
+         GetMonitorInfo(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &monitor_info))
+      {
+         s32 x = monitor_info.rcMonitor.left;
+         s32 y = monitor_info.rcMonitor.top;
+         s32 width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+         s32 height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+
+         SetWindowLong(window, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
+         SetWindowPos(window, HWND_TOP, x, y, width, height, SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
+      }
+   }
+   else
+   {
+      SetWindowLong(window, GWL_STYLE, style|WS_OVERLAPPEDWINDOW);
+      SetWindowPlacement(window, &win32_global_previous_window_placement);
+      SetWindowPos(window, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
+   }
 }
 
 function void win32_adjust_window_rect(RECT *window_rect)
@@ -303,33 +338,53 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
    {
       u32 keycode = (u32)message.wParam;
 
-      u32 previous_state = (message.lParam >> 30) & 1;
+      u32 previous_state   = (message.lParam >> 30) & 1;
       u32 transition_state = (message.lParam >> 31) & 1;
+      bool is_alt_pressed  = (message.lParam >> 29) & 1;
+
+      bool key_is_pressed = !transition_state;
+      bool key_changed_state = (previous_state == transition_state);
 
       switch(keycode)
       {
          case VK_UP:
          {
-            input->move_up.is_pressed = !transition_state;
-            input->move_up.changed_state = (previous_state == transition_state);
+            input->move_up.is_pressed = key_is_pressed;
+            input->move_up.changed_state = key_changed_state;
          } break;
 
          case VK_DOWN:
          {
-            input->move_down.is_pressed = !transition_state;
-            input->move_down.changed_state = (previous_state == transition_state);
+            input->move_down.is_pressed = key_is_pressed;
+            input->move_down.changed_state = key_changed_state;
          } break;
 
          case VK_LEFT:
          {
-            input->move_left.is_pressed = !transition_state;
-            input->move_left.changed_state = (previous_state == transition_state);
+            input->move_left.is_pressed = key_is_pressed;
+            input->move_left.changed_state = key_changed_state;
          } break;
 
          case VK_RIGHT:
          {
-            input->move_right.is_pressed = !transition_state;
-            input->move_right.changed_state = (previous_state == transition_state);
+            input->move_right.is_pressed = key_is_pressed;
+            input->move_right.changed_state = key_changed_state;
+         } break;
+
+         case VK_RETURN:
+         {
+            if(is_alt_pressed && key_is_pressed && key_changed_state)
+            {
+               win32_toggle_fullscreen(message.hwnd);
+            }
+         } break;
+
+         case VK_F4:
+         {
+            if(is_alt_pressed)
+            {
+               win32_global_is_running = false;
+            }
          } break;
       }
 
