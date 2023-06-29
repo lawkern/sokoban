@@ -342,11 +342,11 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
    {
       u32 keycode = (u32)message.wParam;
 
+      u32 is_alt_pressed   = (message.lParam >> 29) & 1;
       u32 previous_state   = (message.lParam >> 30) & 1;
       u32 transition_state = (message.lParam >> 31) & 1;
-      bool is_alt_pressed  = (message.lParam >> 29) & 1;
 
-      bool key_is_pressed = !transition_state;
+      bool key_is_pressed = (transition_state == 0);
       bool key_changed_state = (previous_state == transition_state);
 
       switch(keycode)
@@ -377,6 +377,18 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
          {
             input->move_right.is_pressed = key_is_pressed;
             input->move_right.changed_state = key_changed_state;
+         } break;
+
+         case VK_CONTROL:
+         {
+            input->dash.is_pressed = key_is_pressed;
+            input->dash.changed_state = key_changed_state;
+         } break;
+
+         case VK_SHIFT:
+         {
+            input->charge.is_pressed = key_is_pressed;
+            input->charge.changed_state = key_changed_state;
          } break;
 
          case 'U':
@@ -510,7 +522,12 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    win32_global_is_running = true;
    while(win32_global_is_running)
    {
-      ZeroMemory(&input, sizeof(input));
+      // TODO(law): Will clearing just the state changes result in stuck keys if
+      // a WM_KEYUP or WM_SYSKEYUP message is somehow missed?
+      for(u32 index = 0; index < ARRAY_LENGTH(input.buttons); ++index)
+      {
+         input.buttons[index].changed_state = 0;
+      }
 
       MSG message;
       while(PeekMessage(&message, 0, 0, 0, PM_REMOVE))

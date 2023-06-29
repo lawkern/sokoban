@@ -74,16 +74,29 @@ struct game_input_button
 
 struct game_input
 {
-   struct game_input_button move_up;
-   struct game_input_button move_down;
-   struct game_input_button move_left;
-   struct game_input_button move_right;
+   union
+   {
+      struct
+      {
+         struct game_input_button move_up;
+         struct game_input_button move_down;
+         struct game_input_button move_left;
+         struct game_input_button move_right;
 
-   struct game_input_button undo;
-   struct game_input_button reload;
+         struct game_input_button dash;
+         struct game_input_button charge;
 
-   struct game_input_button next;
-   struct game_input_button previous;
+         struct game_input_button undo;
+         struct game_input_button reload;
+
+         struct game_input_button next;
+         struct game_input_button previous;
+      };
+
+      // TODO(Law): Make sure the array size is always >= the number of buttons
+      // defined above.
+      struct game_input_button buttons[16];
+   };
 };
 
 function bool is_pressed(struct game_input_button button)
@@ -342,9 +355,22 @@ enum player_direction
    PLAYER_DIRECTION_RIGHT,
 };
 
-function void move_player(struct game_level *level, enum player_direction direction)
+enum player_movement
 {
-   // TODO(law): Store player position more intelligently.
+   PLAYER_MOVEMENT_WALK,
+   PLAYER_MOVEMENT_DASH,
+   PLAYER_MOVEMENT_CHARGE,
+};
+
+function void move_player(struct game_level *level, enum player_direction direction, enum player_movement movement)
+{
+   // TODO(law): Using a goto to jump to the beginning of the function is
+   // probably a better choice than recursion, but the constrained board size
+   // means this shouldn't recurse TOO deeply.
+
+   // TODO(law): Store player position more intelligently, especially if we're
+   // calling ourselves recursively and searching every time.
+
    for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
    {
       for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
@@ -381,6 +407,11 @@ function void move_player(struct game_level *level, enum player_direction direct
 
                   level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
                   level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+
+                  if(movement == PLAYER_MOVEMENT_DASH || movement == PLAYER_MOVEMENT_CHARGE)
+                  {
+                     move_player(level, direction, movement);
+                  }
                }
                else if(d == TILE_TYPE_BOX || d == TILE_TYPE_BOX_ON_GOAL)
                {
@@ -404,11 +435,19 @@ function void move_player(struct game_level *level, enum player_direction direct
                      enum tile_type b = level->map.tiles[by][bx];
                      if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
                      {
-                        push_undo(level);
+                        if(movement != PLAYER_MOVEMENT_DASH)
+                        {
+                           push_undo(level);
 
-                        level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-                        level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
-                        level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
+                           level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                           level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                           level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
+
+                           if(movement == PLAYER_MOVEMENT_CHARGE)
+                           {
+                              move_player(level, direction, movement);
+                           }
+                        }
                      }
                   }
                }
@@ -514,21 +553,31 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    }
 
    // NOTE(law): Process player input.
+   enum player_movement movement = PLAYER_MOVEMENT_WALK;
+   if(is_pressed(input->dash))
+   {
+      movement = PLAYER_MOVEMENT_DASH;
+   }
+   else if(is_pressed(input->charge))
+   {
+      movement = PLAYER_MOVEMENT_CHARGE;
+   }
+
    if(was_pressed(input->move_up))
    {
-      move_player(level, PLAYER_DIRECTION_UP);
+      move_player(level, PLAYER_DIRECTION_UP, movement);
    }
    else if(was_pressed(input->move_down))
    {
-      move_player(level, PLAYER_DIRECTION_DOWN);
+      move_player(level, PLAYER_DIRECTION_DOWN, movement);
    }
    else if(was_pressed(input->move_left))
    {
-      move_player(level, PLAYER_DIRECTION_LEFT);
+      move_player(level, PLAYER_DIRECTION_LEFT, movement);
    }
    else if(was_pressed(input->move_right))
    {
-      move_player(level, PLAYER_DIRECTION_RIGHT);
+      move_player(level, PLAYER_DIRECTION_RIGHT, movement);
    }
    else if(was_pressed(input->undo))
    {
