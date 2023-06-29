@@ -352,30 +352,69 @@ function void move_player(struct game_level *level, enum player_direction direct
          enum tile_type type = level->map.tiles[y][x];
          if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
          {
-            u32 destinationx = x;
-            u32 destinationy = y;
+            // NOTE(law): Determine the initial player position.
+            enum tile_type o = type;
+            u32 ox = x;
+            u32 oy = y;
+
+            // NOTE(law): Calculate potential player destination.
+            u32 px = ox;
+            u32 py = oy;
             switch(direction)
             {
-               case PLAYER_DIRECTION_UP:    {destinationy++;} break;
-               case PLAYER_DIRECTION_DOWN:  {destinationy--;} break;
-               case PLAYER_DIRECTION_LEFT:  {destinationx--;} break;
-               case PLAYER_DIRECTION_RIGHT: {destinationx++;} break;
+               case PLAYER_DIRECTION_UP:    {py++;} break;
+               case PLAYER_DIRECTION_DOWN:  {py--;} break;
+               case PLAYER_DIRECTION_LEFT:  {px--;} break;
+               case PLAYER_DIRECTION_RIGHT: {px++;} break;
             }
 
-            if(destinationx >= 0 && destinationx < SCREEN_TILE_COUNT_X &&
-               destinationy >= 0 && destinationy < SCREEN_TILE_COUNT_Y)
+            if(px >= 0 && px < SCREEN_TILE_COUNT_X &&
+               py >= 0 && py < SCREEN_TILE_COUNT_Y)
             {
-               // TODO(law): Handle box movement.
-               enum tile_type destination = level->map.tiles[destinationy][destinationx];
-               if(destination == TILE_TYPE_FLOOR || destination == TILE_TYPE_GOAL)
+               enum tile_type d = level->map.tiles[py][px];
+               if(d == TILE_TYPE_FLOOR || d == TILE_TYPE_GOAL)
                {
+                  // NOTE(law): If the player destination tile is unoccupied,
+                  // move directly there while accounting for goal vs. floor
+                  // tiles.
                   push_undo(level);
 
-                  level->map.tiles[y][x] = (type == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-                  level->map.tiles[destinationy][destinationx] = (destination == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                  level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                  level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+               }
+               else if(d == TILE_TYPE_BOX || d == TILE_TYPE_BOX_ON_GOAL)
+               {
+                  // NOTE(law): Calculate potential box destination.
+                  u32 bx = px;
+                  u32 by = py;
+                  switch(direction)
+                  {
+                     case PLAYER_DIRECTION_UP:    {by++;} break;
+                     case PLAYER_DIRECTION_DOWN:  {by--;} break;
+                     case PLAYER_DIRECTION_LEFT:  {bx--;} break;
+                     case PLAYER_DIRECTION_RIGHT: {bx++;} break;
+                  }
+
+                  if(bx >= 0 && bx < SCREEN_TILE_COUNT_X &&
+                     by >= 0 && by < SCREEN_TILE_COUNT_Y)
+                  {
+                     // NOTE(law): If the player destination tile is a box that
+                     // can be moved, move the box and player accounting for
+                     // goal vs. floor tiles.
+                     enum tile_type b = level->map.tiles[by][bx];
+                     if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
+                     {
+                        push_undo(level);
+
+                        level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                        level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                        level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
+                     }
+                  }
                }
             }
 
+            // NOTE(law): Break out of both loops once the player is found.
             return;
          }
       }
