@@ -453,6 +453,35 @@ function void immediate_tile(struct render_bitmap *destination, u32 posx, u32 po
    }
 }
 
+function bool is_level_complete(struct game_level *level)
+{
+   for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
+   {
+      for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
+      {
+         enum tile_type type = level->map.tiles[tiley][tilex];
+         if(type == TILE_TYPE_PLAYER_ON_GOAL || type == TILE_TYPE_GOAL)
+         {
+            return(false);
+         }
+      }
+   }
+
+   return(true);
+}
+
+function struct game_level *next_level(struct game_state *gs)
+{
+   gs->level_index = (gs->level_index + 1) % gs->level_count;
+   return(gs->levels[gs->level_index]);
+}
+
+function struct game_level *previous_level(struct game_state *gs)
+{
+   gs->level_index = (gs->level_index > 0) ? gs->level_index - 1 : gs->level_count - 1;
+   return(gs->levels[gs->level_index]);
+}
+
 function void update(struct game_state *gs, struct render_bitmap *bitmap, struct game_input *input)
 {
    if(!gs->is_initialized)
@@ -465,7 +494,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
       load_level(gs->levels[gs->level_count++], "../data/levels/simple.sok");
       load_level(gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
 
-      gs->level_index = 1;
+      gs->level_index = 0;
 
       gs->player = load_bitmap(&gs->arena, "../data/player.bmp");
       gs->box    = load_bitmap(&gs->arena, "../data/box.bmp");
@@ -477,6 +506,12 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    }
 
    struct game_level *level = gs->levels[gs->level_index];
+
+   if(is_level_complete(level))
+   {
+      reload_level(level);
+      level = next_level(gs);
+   }
 
    // NOTE(law): Process player input.
    if(was_pressed(input->move_up))
@@ -505,13 +540,11 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    }
    else if(was_pressed(input->next))
    {
-      gs->level_index = (gs->level_index + 1) % gs->level_count;
-      level = gs->levels[gs->level_index];
+      level = next_level(gs);
    }
    else if(was_pressed(input->previous))
    {
-      gs->level_index = (gs->level_index > 0) ? gs->level_index - 1 : gs->level_count - 1;
-      level = gs->levels[gs->level_index];
+      level = previous_level(gs);
    }
 
    // NOTE(law): Render tiles.
