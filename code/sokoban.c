@@ -126,6 +126,9 @@ enum tile_type
 
 struct tile_map
 {
+   u32 playerx;
+   u32 playery;
+
    enum tile_type tiles[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
 };
 
@@ -279,13 +282,13 @@ function void load_level(struct game_level *level, char *file_path)
       assert(x < SCREEN_TILE_COUNT_X);
       assert(y < SCREEN_TILE_COUNT_Y);
 
-      u8 tile = level_file.memory[index++];
-      if(is_inconsequential_whitespace(tile))
+      u8 tile_character = level_file.memory[index++];
+      if(is_inconsequential_whitespace(tile_character))
       {
          continue;
       }
 
-      switch(tile)
+      switch(tile_character)
       {
          case '@': {level->map.tiles[y][x] = TILE_TYPE_PLAYER;} break;
          case '+': {level->map.tiles[y][x] = TILE_TYPE_PLAYER_ON_GOAL;} break;
@@ -296,8 +299,15 @@ function void load_level(struct game_level *level, char *file_path)
          default:  {level->map.tiles[y][x] = TILE_TYPE_FLOOR;} break;
       }
 
+      enum tile_type type = level->map.tiles[y][x];
+      if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
+      {
+         level->map.playerx = x;
+         level->map.playery = y;
+      }
+
       x++;
-      if(tile == '\n')
+      if(tile_character == '\n')
       {
          y++;
          x = offsetx;
@@ -319,6 +329,9 @@ function void push_undo(struct game_level *level)
 
    struct tile_map *undo = level->undos + level->undo_index;
 
+   undo->playerx = level->map.playerx;
+   undo->playery = level->map.playery;
+
    for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
    {
       for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
@@ -333,6 +346,9 @@ function void pop_undo(struct game_level *level)
    if(level->undo_count > 0)
    {
       struct tile_map *undo = level->undos + level->undo_index;
+
+      level->map.playerx = undo->playerx;
+      level->map.playery = undo->playery;
 
       for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
       {
@@ -368,93 +384,86 @@ function void move_player(struct game_level *level, enum player_direction direct
    // probably a better choice than recursion, but the constrained board size
    // means this shouldn't recurse TOO deeply.
 
-   // TODO(law): Store player position more intelligently, especially if we're
-   // calling ourselves recursively and searching every time.
+   // NOTE(law): Determine initial player position.
+   u32 ox = level->map.playerx;
+   u32 oy = level->map.playery;
 
-   for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
+   enum tile_type o = level->map.tiles[oy][ox];
+   assert(o == TILE_TYPE_PLAYER || o == TILE_TYPE_PLAYER_ON_GOAL);
+
+   // NOTE(law): Calculate potential player destination.
+   u32 px = ox;
+   u32 py = oy;
+   switch(direction)
    {
-      for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
+      case PLAYER_DIRECTION_UP:    {py++;} break;
+      case PLAYER_DIRECTION_DOWN:  {py--;} break;
+      case PLAYER_DIRECTION_LEFT:  {px--;} break;
+      case PLAYER_DIRECTION_RIGHT: {px++;} break;
+   }
+
+   if(px >= 0 && px < SCREEN_TILE_COUNT_X &&
+      py >= 0 && py < SCREEN_TILE_COUNT_Y)
+   {
+      enum tile_type d = level->map.tiles[py][px];
+      if(d == TILE_TYPE_FLOOR || d == TILE_TYPE_GOAL)
       {
-         enum tile_type type = level->map.tiles[y][x];
-         if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
+         // NOTE(law): If the player destination tile is unoccupied, move
+         // directly there while accounting for goal vs. floor tiles.
+
+         push_undo(level);
+
+         level->map.playerx = px;
+         level->map.playery = py;
+
+         level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+         level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+
+         if(movement == PLAYER_MOVEMENT_DASH || movement == PLAYER_MOVEMENT_CHARGE)
          {
-            // NOTE(law): Determine the initial player position.
-            enum tile_type o = type;
-            u32 ox = x;
-            u32 oy = y;
+            move_player(level, direction, movement);
+         }
+      }
+      else if(d == TILE_TYPE_BOX || d == TILE_TYPE_BOX_ON_GOAL)
+      {
+         // NOTE(law): Calculate potential box destination.
+         u32 bx = px;
+         u32 by = py;
+         switch(direction)
+         {
+            case PLAYER_DIRECTION_UP:    {by++;} break;
+            case PLAYER_DIRECTION_DOWN:  {by--;} break;
+            case PLAYER_DIRECTION_LEFT:  {bx--;} break;
+            case PLAYER_DIRECTION_RIGHT: {bx++;} break;
+         }
 
-            // NOTE(law): Calculate potential player destination.
-            u32 px = ox;
-            u32 py = oy;
-            switch(direction)
-            {
-               case PLAYER_DIRECTION_UP:    {py++;} break;
-               case PLAYER_DIRECTION_DOWN:  {py--;} break;
-               case PLAYER_DIRECTION_LEFT:  {px--;} break;
-               case PLAYER_DIRECTION_RIGHT: {px++;} break;
-            }
+         if(bx >= 0 && bx < SCREEN_TILE_COUNT_X &&
+            by >= 0 && by < SCREEN_TILE_COUNT_Y)
+         {
+            // NOTE(law): If the player destination tile is a box that can be
+            // moved, move the box and player accounting for goal vs. floor
+            // tiles.
 
-            if(px >= 0 && px < SCREEN_TILE_COUNT_X &&
-               py >= 0 && py < SCREEN_TILE_COUNT_Y)
+            enum tile_type b = level->map.tiles[by][bx];
+            if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
             {
-               enum tile_type d = level->map.tiles[py][px];
-               if(d == TILE_TYPE_FLOOR || d == TILE_TYPE_GOAL)
+               if(movement != PLAYER_MOVEMENT_DASH)
                {
-                  // NOTE(law): If the player destination tile is unoccupied,
-                  // move directly there while accounting for goal vs. floor
-                  // tiles.
                   push_undo(level);
 
-                  level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-                  level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                  level->map.playerx = px;
+                  level->map.playery = py;
 
-                  if(movement == PLAYER_MOVEMENT_DASH || movement == PLAYER_MOVEMENT_CHARGE)
+                  level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                  level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                  level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
+
+                  if(movement == PLAYER_MOVEMENT_CHARGE)
                   {
                      move_player(level, direction, movement);
                   }
                }
-               else if(d == TILE_TYPE_BOX || d == TILE_TYPE_BOX_ON_GOAL)
-               {
-                  // NOTE(law): Calculate potential box destination.
-                  u32 bx = px;
-                  u32 by = py;
-                  switch(direction)
-                  {
-                     case PLAYER_DIRECTION_UP:    {by++;} break;
-                     case PLAYER_DIRECTION_DOWN:  {by--;} break;
-                     case PLAYER_DIRECTION_LEFT:  {bx--;} break;
-                     case PLAYER_DIRECTION_RIGHT: {bx++;} break;
-                  }
-
-                  if(bx >= 0 && bx < SCREEN_TILE_COUNT_X &&
-                     by >= 0 && by < SCREEN_TILE_COUNT_Y)
-                  {
-                     // NOTE(law): If the player destination tile is a box that
-                     // can be moved, move the box and player accounting for
-                     // goal vs. floor tiles.
-                     enum tile_type b = level->map.tiles[by][bx];
-                     if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
-                     {
-                        if(movement != PLAYER_MOVEMENT_DASH)
-                        {
-                           push_undo(level);
-
-                           level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-                           level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
-                           level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
-
-                           if(movement == PLAYER_MOVEMENT_CHARGE)
-                           {
-                              move_player(level, direction, movement);
-                           }
-                        }
-                     }
-                  }
-               }
             }
-
-            // NOTE(law): Break out of both loops once the player is found.
-            return;
          }
       }
    }
