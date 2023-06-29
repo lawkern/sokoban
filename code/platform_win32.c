@@ -10,6 +10,10 @@
 #define WIN32_LOG_MAX_LENGTH 1024
 #define WIN32_DEFAULT_DPI 96
 
+#define WIN32_SECONDS_ELAPSED(start, end) ((float)((end).QuadPart - (start).QuadPart) / \
+                                           (float)win32_global_counts_per_second.QuadPart)
+
+global LARGE_INTEGER win32_global_counts_per_second;
 global int win32_global_dpi = WIN32_DEFAULT_DPI;
 global bool win32_global_is_running;
 global BITMAPINFO *win32_global_bitmap_info;
@@ -424,6 +428,9 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
 
 int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line, int show_command)
 {
+   QueryPerformanceFrequency(&win32_global_counts_per_second);
+   bool sleep_is_granular = (timeBeginPeriod(1) == TIMERR_NOERROR);
+
    WNDCLASSEX window_class = {0};
    window_class.cbSize = sizeof(window_class);
    window_class.style = CS_HREDRAW|CS_VREDRAW;
@@ -494,6 +501,12 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
 
    struct game_input input = {0};
 
+   float target_seconds_per_frame = 1.0f / 60.0f;
+   float frame_seconds_elapsed = 0;
+
+   LARGE_INTEGER frame_start_count;
+   QueryPerformanceCounter(&frame_start_count);
+
    win32_global_is_running = true;
    while(win32_global_is_running)
    {
@@ -517,6 +530,40 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       HDC device_context = GetDC(window);
       win32_display_bitmap(bitmap, window, device_context);
       ReleaseDC(window, device_context);
+
+      // NOTE(law): Calculate elapsed frame time.
+      LARGE_INTEGER frame_end_count;
+      QueryPerformanceCounter(&frame_end_count);
+      frame_seconds_elapsed = WIN32_SECONDS_ELAPSED(frame_start_count, frame_end_count);
+
+      // NOTE(law): If possible, sleep for some of the remaining frame time. The
+      // sleep time calculation intentionally undershoots to prevent
+      // oversleeping due to the lack of sub-millisecond granualarity.
+      DWORD sleep_ms = 0;
+      float sleep_fraction = 0.9f;
+      if(sleep_is_granular && (frame_seconds_elapsed < target_seconds_per_frame))
+      {
+         sleep_ms = (DWORD)((target_seconds_per_frame - frame_seconds_elapsed) * 1000.0f * sleep_fraction);
+         if(sleep_ms > 0)
+         {
+            Sleep(sleep_ms);
+         }
+      }
+
+      // NOTE(law): Spin lock for the remaining frame time.
+      while(frame_seconds_elapsed < target_seconds_per_frame)
+      {
+         QueryPerformanceCounter(&frame_end_count);
+         frame_seconds_elapsed = WIN32_SECONDS_ELAPSED(frame_start_count, frame_end_count);
+      }
+      frame_start_count = frame_end_count;
+
+      static u32 frame_count = 0;
+      if((frame_count++ % 30) == 0)
+      {
+         platform_log("Frame time: %0.03fms, ", frame_seconds_elapsed * 1000.0f);
+         platform_log("Sleep: %ums\n", sleep_ms);
+      }
    }
 
    return(0);

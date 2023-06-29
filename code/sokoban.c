@@ -47,6 +47,25 @@ struct render_bitmap
    u32 *memory;
 };
 
+struct memory_arena
+{
+   u8 *base_address;
+   size_t size;
+   size_t used;
+};
+
+#define ALLOCATE(arena, type) (allocate((arena), sizeof(type)))
+
+function void *allocate(struct memory_arena *arena, size_t size)
+{
+   assert((arena->used + size) <= arena->size);
+
+   void *result = arena->base_address + arena->used;
+   arena->used += size;
+
+   return(result);
+}
+
 struct game_input_button
 {
    bool is_pressed;
@@ -91,25 +110,6 @@ enum tile_type
    TILE_TYPE_WALL,
    TILE_TYPE_GOAL,
 };
-
-struct memory_arena
-{
-   u8 *base_address;
-   size_t size;
-   size_t used;
-};
-
-#define ALLOCATE(arena, type) (allocate((arena), sizeof(type)))
-
-function void *allocate(struct memory_arena *arena, size_t size)
-{
-   assert((arena->used + size) <= arena->size);
-
-   void *result = arena->base_address + arena->used;
-   arena->used += size;
-
-   return(result);
-}
 
 struct tile_map
 {
