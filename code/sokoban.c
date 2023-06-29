@@ -59,7 +59,12 @@ struct game_input
    struct game_input_button move_down;
    struct game_input_button move_left;
    struct game_input_button move_right;
+
    struct game_input_button undo;
+   struct game_input_button reload;
+
+   struct game_input_button next;
+   struct game_input_button previous;
 };
 
 function bool is_pressed(struct game_input_button button)
@@ -113,6 +118,7 @@ struct tile_map
 
 struct game_level
 {
+   char *file_path;
    struct tile_map map;
 
    u32 undo_index;
@@ -204,6 +210,8 @@ function bool is_inconsequential_whitespace(char c)
 
 function void load_level(struct game_level *level, char *file_path)
 {
+   level->file_path = file_path;
+
    // NOTE(law): Clear level contents.
    for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
    {
@@ -286,6 +294,10 @@ function void load_level(struct game_level *level, char *file_path)
    platform_free_file(&level_file);
 }
 
+function void reload_level(struct game_level *level)
+{
+   load_level(level, level->file_path);
+}
 
 function void push_undo(struct game_level *level)
 {
@@ -411,8 +423,8 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
          gs->levels[index] = ALLOCATE(&gs->arena, struct game_level);
       }
 
-      load_level(gs->levels[0], "../data/levels/simple.sok");
-      load_level(gs->levels[1], "../data/levels/empty_section.sok");
+      load_level(gs->levels[gs->level_count++], "../data/levels/simple.sok");
+      load_level(gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
 
       gs->level_index = 1;
 
@@ -447,6 +459,20 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    else if(was_pressed(input->undo))
    {
       pop_undo(level);
+   }
+   else if(was_pressed(input->reload))
+   {
+      reload_level(gs->levels[gs->level_index]);
+   }
+   else if(was_pressed(input->next))
+   {
+      gs->level_index = (gs->level_index + 1) % gs->level_count;
+      level = gs->levels[gs->level_index];
+   }
+   else if(was_pressed(input->previous))
+   {
+      gs->level_index = (gs->level_index > 0) ? gs->level_index - 1 : gs->level_count - 1;
+      level = gs->levels[gs->level_index];
    }
 
    // NOTE(law): Render tiles.

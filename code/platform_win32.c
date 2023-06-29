@@ -381,6 +381,24 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
             input->undo.changed_state = key_changed_state;
          } break;
 
+         case 'R':
+         {
+            input->reload.is_pressed = key_is_pressed;
+            input->reload.changed_state = key_changed_state;
+         } break;
+
+         case VK_OEM_PERIOD:
+         {
+            input->next.is_pressed = key_is_pressed;
+            input->next.changed_state = key_changed_state;
+         } break;
+
+         case VK_OEM_COMMA:
+         {
+            input->previous.is_pressed = key_is_pressed;
+            input->previous.changed_state = key_changed_state;
+         } break;
+
          case VK_RETURN:
          {
             if(is_alt_pressed && key_is_pressed && key_changed_state)
