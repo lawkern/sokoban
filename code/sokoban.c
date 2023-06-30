@@ -211,6 +211,7 @@ struct game_state
    struct game_level *levels[64];
 
    struct render_bitmap player;
+   struct render_bitmap player_on_goal;
    struct render_bitmap box;
    struct render_bitmap box_on_goal;
    struct render_bitmap floor[4];
@@ -543,8 +544,26 @@ function void immediate_bitmap(struct render_bitmap *destination, struct render_
          u32 destinationy = posy + y;
          u32 destination_index = (destinationy * destination->width) + destinationx;
 
-         u32 color = source.memory[(y * source.width) + x];
+         u32 source_color = source.memory[(y * source.width) + x];
+         u8 sr = (source_color >> 16) & 0xFF;
+         u8 sg = (source_color >>  8) & 0xFF;
+         u8 sb = (source_color >>  0) & 0xFF;
+         u8 sa = (source_color >> 24) & 0xFF;
 
+         u32 destination_color = destination->memory[destination_index];
+         u8 dr = (destination_color >> 16) & 0xFF;
+         u8 dg = (destination_color >>  8) & 0xFF;
+         u8 db = (destination_color >>  0) & 0xFF;
+         u8 da = (destination_color >> 24) & 0xFF;
+
+         float alpha = (float)sa / 255.0f;
+
+         u8 r = (u8)(((1.0f - alpha) * (float)dr) + (alpha * (float)sr));
+         u8 g = (u8)(((1.0f - alpha) * (float)dg) + (alpha * (float)sg));
+         u8 b = (u8)(((1.0f - alpha) * (float)db) + (alpha * (float)sb));
+         u8 a = da;
+
+         u32 color = ((r << 16) | (g << 8) | (b << 0) | (a << 24));
          destination->memory[destination_index] = color;
       }
    }
@@ -615,11 +634,12 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
       gs->floor[2] = load_bitmap(&gs->arena, "../data/floor02.bmp");
       gs->floor[3] = load_bitmap(&gs->arena, "../data/floor03.bmp");
 
-      gs->player      = load_bitmap(&gs->arena, "../data/player.bmp");
-      gs->box         = load_bitmap(&gs->arena, "../data/box.bmp");
-      gs->box_on_goal = load_bitmap(&gs->arena, "../data/box_on_goal.bmp");
-      gs->wall        = load_bitmap(&gs->arena, "../data/wall.bmp");
-      gs->goal        = load_bitmap(&gs->arena, "../data/goal.bmp");
+      gs->player         = load_bitmap(&gs->arena, "../data/player.bmp");
+      gs->player_on_goal = load_bitmap(&gs->arena, "../data/player_on_goal.bmp");
+      gs->box            = load_bitmap(&gs->arena, "../data/box.bmp");
+      gs->box_on_goal    = load_bitmap(&gs->arena, "../data/box_on_goal.bmp");
+      gs->wall           = load_bitmap(&gs->arena, "../data/wall.bmp");
+      gs->goal           = load_bitmap(&gs->arena, "../data/goal.bmp");
 
       gs->is_initialized = true;
    }
@@ -686,17 +706,27 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
          u32 x = tilex * TILE_DIMENSION_PIXELS;
          u32 y = tiley * TILE_DIMENSION_PIXELS;
 
+         // TODO(law): Avoid drawing the floor in cases where it will be
+         // occluded anyway.
+
+         // NOTE(law): Draw the floor up front now that we have assets with
+         // transparency.
+         immediate_bitmap(bitmap, gs->floor[tile.floor_index], x, y);
+
          switch(tile.type)
          {
             case TILE_TYPE_FLOOR:
             {
-               immediate_bitmap(bitmap, gs->floor[tile.floor_index], x, y);
             } break;
 
             case TILE_TYPE_PLAYER:
-            case TILE_TYPE_PLAYER_ON_GOAL:
             {
                immediate_bitmap(bitmap, gs->player, x, y);
+            } break;
+
+            case TILE_TYPE_PLAYER_ON_GOAL:
+            {
+               immediate_bitmap(bitmap, gs->player_on_goal, x, y);
             } break;
 
             case TILE_TYPE_BOX:
