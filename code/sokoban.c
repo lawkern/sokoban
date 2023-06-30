@@ -22,6 +22,7 @@
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
+typedef uint64_t u64;
 typedef int32_t s32;
 
 struct platform_file
@@ -63,6 +64,55 @@ function void *allocate(struct memory_arena *arena, size_t size)
    void *result = arena->base_address + arena->used;
    arena->used += size;
 
+   return(result);
+}
+
+// NOTE(law): This pseudorandom number generation is based on the version
+// described at http://burtleburtle.net/bob/rand/smallprng.html
+
+struct random_entropy
+{
+   u64 a;
+   u64 b;
+   u64 c;
+   u64 d;
+};
+
+#define ROTATE(x, k) (((x) << (k)) | ((x) >> (32 - (k))))
+function u64 random_value(struct random_entropy *entropy)
+{
+   u64 entropy_e = entropy->a - ROTATE(entropy->b, 27);
+   entropy->a    = entropy->b ^ ROTATE(entropy->c, 17);
+   entropy->b    = entropy->c + entropy->d;
+   entropy->c    = entropy->d + entropy_e;
+   entropy->d    = entropy_e  + entropy->a;
+
+   return(entropy->d);
+}
+#undef ROTATE
+
+function struct random_entropy random_seed(u64 seed)
+{
+   struct random_entropy result;
+   result.a = 0xf1ea5eed;
+   result.b = seed;
+   result.c = seed;
+   result.d = seed;
+
+   for(u64 index = 0; index < 20; ++index)
+   {
+      random_value(&result);
+   }
+
+   return(result);
+}
+
+function u32 random_range(struct random_entropy *entropy, u32 minimum, u32 maximum)
+{
+   u64 value = random_value(entropy);
+   u32 range = maximum - minimum + 1;
+
+   u32 result = (u32)((value % (u64)range) + (u64)minimum);
    return(result);
 }
 
@@ -124,18 +174,27 @@ enum tile_type
    TILE_TYPE_GOAL,
 };
 
+struct tile_info
+{
+   enum tile_type type;
+   u32 floor_index;
+};
+
 struct tile_map
 {
    u32 playerx;
    u32 playery;
 
-   enum tile_type tiles[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
+   struct tile_info tiles[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
 };
 
 struct game_level
 {
    char *file_path;
    struct tile_map map;
+
+   // TODO(law): Don't store the floor bitmap indices in the undo states,
+   // they're doubling the storage footprint for no benefit.
 
    u32 undo_index;
    u32 undo_count;
@@ -145,14 +204,16 @@ struct game_level
 struct game_state
 {
    struct memory_arena arena;
+   struct random_entropy entropy;
 
    u32 level_index;
    u32 level_count;
-   struct game_level *levels[32];
+   struct game_level *levels[64];
 
    struct render_bitmap player;
    struct render_bitmap box;
-   struct render_bitmap floor;
+   struct render_bitmap box_on_goal;
+   struct render_bitmap floor[4];
    struct render_bitmap wall;
    struct render_bitmap goal;
 
@@ -224,7 +285,7 @@ function bool is_inconsequential_whitespace(char c)
    return(result);
 }
 
-function void load_level(struct game_level *level, char *file_path)
+function void load_level(struct game_state *gs, struct game_level *level, char *file_path)
 {
    level->file_path = file_path;
 
@@ -233,7 +294,9 @@ function void load_level(struct game_level *level, char *file_path)
    {
       for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
       {
-         level->map.tiles[y][x] = 0;
+         struct tile_info *tile = level->map.tiles[y] + x;
+         tile->type = 0;
+         tile->floor_index = random_range(&gs->entropy, 0, ARRAY_LENGTH(gs->floor) - 1);
       }
    }
 
@@ -288,19 +351,20 @@ function void load_level(struct game_level *level, char *file_path)
          continue;
       }
 
+      struct tile_info *tile = level->map.tiles[y] + x;
+
       switch(tile_character)
       {
-         case '@': {level->map.tiles[y][x] = TILE_TYPE_PLAYER;} break;
-         case '+': {level->map.tiles[y][x] = TILE_TYPE_PLAYER_ON_GOAL;} break;
-         case '$': {level->map.tiles[y][x] = TILE_TYPE_BOX;} break;
-         case '*': {level->map.tiles[y][x] = TILE_TYPE_BOX_ON_GOAL;} break;
-         case '#': {level->map.tiles[y][x] = TILE_TYPE_WALL;} break;
-         case '.': {level->map.tiles[y][x] = TILE_TYPE_GOAL;} break;
-         default:  {level->map.tiles[y][x] = TILE_TYPE_FLOOR;} break;
+         case '@': {tile->type = TILE_TYPE_PLAYER;} break;
+         case '+': {tile->type = TILE_TYPE_PLAYER_ON_GOAL;} break;
+         case '$': {tile->type = TILE_TYPE_BOX;} break;
+         case '*': {tile->type = TILE_TYPE_BOX_ON_GOAL;} break;
+         case '#': {tile->type = TILE_TYPE_WALL;} break;
+         case '.': {tile->type = TILE_TYPE_GOAL;} break;
+         default:  {tile->type = TILE_TYPE_FLOOR;} break;
       }
 
-      enum tile_type type = level->map.tiles[y][x];
-      if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
+      if(tile->type == TILE_TYPE_PLAYER || tile->type == TILE_TYPE_PLAYER_ON_GOAL)
       {
          level->map.playerx = x;
          level->map.playery = y;
@@ -317,9 +381,9 @@ function void load_level(struct game_level *level, char *file_path)
    platform_free_file(&level_file);
 }
 
-function void reload_level(struct game_level *level)
+function void reload_level(struct game_state *gs, struct game_level *level)
 {
-   load_level(level, level->file_path);
+   load_level(gs, level, level->file_path);
 }
 
 function void push_undo(struct game_level *level)
@@ -388,7 +452,7 @@ function void move_player(struct game_level *level, enum player_direction direct
    u32 ox = level->map.playerx;
    u32 oy = level->map.playery;
 
-   enum tile_type o = level->map.tiles[oy][ox];
+   enum tile_type o = level->map.tiles[oy][ox].type;
    assert(o == TILE_TYPE_PLAYER || o == TILE_TYPE_PLAYER_ON_GOAL);
 
    // NOTE(law): Calculate potential player destination.
@@ -405,7 +469,7 @@ function void move_player(struct game_level *level, enum player_direction direct
    if(px >= 0 && px < SCREEN_TILE_COUNT_X &&
       py >= 0 && py < SCREEN_TILE_COUNT_Y)
    {
-      enum tile_type d = level->map.tiles[py][px];
+      enum tile_type d = level->map.tiles[py][px].type;
       if(d == TILE_TYPE_FLOOR || d == TILE_TYPE_GOAL)
       {
          // NOTE(law): If the player destination tile is unoccupied, move
@@ -416,8 +480,8 @@ function void move_player(struct game_level *level, enum player_direction direct
          level->map.playerx = px;
          level->map.playery = py;
 
-         level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-         level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+         level->map.tiles[oy][ox].type = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+         level->map.tiles[py][px].type = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
 
          if(movement == PLAYER_MOVEMENT_DASH || movement == PLAYER_MOVEMENT_CHARGE)
          {
@@ -444,7 +508,7 @@ function void move_player(struct game_level *level, enum player_direction direct
             // moved, move the box and player accounting for goal vs. floor
             // tiles.
 
-            enum tile_type b = level->map.tiles[by][bx];
+            enum tile_type b = level->map.tiles[by][bx].type;
             if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
             {
                if(movement != PLAYER_MOVEMENT_DASH)
@@ -454,9 +518,9 @@ function void move_player(struct game_level *level, enum player_direction direct
                   level->map.playerx = px;
                   level->map.playery = py;
 
-                  level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-                  level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
-                  level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
+                  level->map.tiles[oy][ox].type = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                  level->map.tiles[py][px].type = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                  level->map.tiles[by][bx].type = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
 
                   if(movement == PLAYER_MOVEMENT_CHARGE)
                   {
@@ -507,7 +571,7 @@ function bool is_level_complete(struct game_level *level)
    {
       for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
       {
-         enum tile_type type = level->map.tiles[tiley][tilex];
+         enum tile_type type = level->map.tiles[tiley][tilex].type;
          if(type == TILE_TYPE_PLAYER_ON_GOAL || type == TILE_TYPE_GOAL)
          {
             return(false);
@@ -534,21 +598,28 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 {
    if(!gs->is_initialized)
    {
+      gs->entropy = random_seed(0x1234);
+
       for(u32 index = 0; index < ARRAY_LENGTH(gs->levels); ++index)
       {
          gs->levels[index] = ALLOCATE(&gs->arena, struct game_level);
       }
 
-      load_level(gs->levels[gs->level_count++], "../data/levels/simple.sok");
-      load_level(gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
+      load_level(gs, gs->levels[gs->level_count++], "../data/levels/simple.sok");
+      load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
 
       gs->level_index = 0;
 
-      gs->player = load_bitmap(&gs->arena, "../data/player.bmp");
-      gs->box    = load_bitmap(&gs->arena, "../data/box.bmp");
-      gs->floor  = load_bitmap(&gs->arena, "../data/floor.bmp");
-      gs->wall   = load_bitmap(&gs->arena, "../data/wall.bmp");
-      gs->goal   = load_bitmap(&gs->arena, "../data/goal.bmp");
+      gs->floor[0] = load_bitmap(&gs->arena, "../data/floor00.bmp");
+      gs->floor[1] = load_bitmap(&gs->arena, "../data/floor01.bmp");
+      gs->floor[2] = load_bitmap(&gs->arena, "../data/floor02.bmp");
+      gs->floor[3] = load_bitmap(&gs->arena, "../data/floor03.bmp");
+
+      gs->player      = load_bitmap(&gs->arena, "../data/player.bmp");
+      gs->box         = load_bitmap(&gs->arena, "../data/box.bmp");
+      gs->box_on_goal = load_bitmap(&gs->arena, "../data/box_on_goal.bmp");
+      gs->wall        = load_bitmap(&gs->arena, "../data/wall.bmp");
+      gs->goal        = load_bitmap(&gs->arena, "../data/goal.bmp");
 
       gs->is_initialized = true;
    }
@@ -557,7 +628,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
    if(is_level_complete(level))
    {
-      reload_level(level);
+      reload_level(gs, level);
       level = next_level(gs);
    }
 
@@ -594,7 +665,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    }
    else if(was_pressed(input->reload))
    {
-      reload_level(gs->levels[gs->level_index]);
+      reload_level(gs, gs->levels[gs->level_index]);
    }
    else if(was_pressed(input->next))
    {
@@ -610,16 +681,16 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    {
       for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
       {
-         enum tile_type type = level->map.tiles[tiley][tilex];
+         struct tile_info tile = level->map.tiles[tiley][tilex];
 
          u32 x = tilex * TILE_DIMENSION_PIXELS;
          u32 y = tiley * TILE_DIMENSION_PIXELS;
 
-         switch(type)
+         switch(tile.type)
          {
             case TILE_TYPE_FLOOR:
             {
-               immediate_bitmap(bitmap, gs->floor, x, y);
+               immediate_bitmap(bitmap, gs->floor[tile.floor_index], x, y);
             } break;
 
             case TILE_TYPE_PLAYER:
@@ -629,9 +700,13 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
             } break;
 
             case TILE_TYPE_BOX:
-            case TILE_TYPE_BOX_ON_GOAL:
             {
                immediate_bitmap(bitmap, gs->box, x, y);
+            } break;
+
+            case TILE_TYPE_BOX_ON_GOAL:
+            {
+               immediate_bitmap(bitmap, gs->box_on_goal, x, y);
             } break;
 
             case TILE_TYPE_WALL:

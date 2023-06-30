@@ -508,7 +508,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    UpdateWindow(window);
 
    struct game_state gs = {0};
-   gs.arena.size = 64 * 1024 * 1024;
+   gs.arena.size = 256 * 1024 * 1024;
    gs.arena.base_address = VirtualAlloc(0, gs.arena.size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
 
    struct game_input input = {0};
