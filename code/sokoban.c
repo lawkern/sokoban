@@ -284,13 +284,16 @@ function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file
    result.memory = allocate(arena, sizeof(u32) * result.width * result.height);
 
    u32 *source_memory = (u32 *)(file.memory + header->bitmap_offset);
+   u32 *row = source_memory + (result.width * (result.height - 1));
 
    for(u32 y = 0; y < result.height; ++y)
    {
       for(u32 x = 0; x < result.width; ++x)
       {
-         result.memory[(y * result.width) + x] = *source_memory++;
+         result.memory[(y * result.width) + x] = *(row + x);
       }
+
+      row -= result.width;
    }
 
    platform_free_file(&file);
@@ -331,14 +334,14 @@ function enum wall_type get_wall_type(struct tile_map_state *map, u32 x, u32 y)
    bool empty_west  = false;
 
    u32 nx = x;
-   u32 ny = y + 1;
+   u32 ny = y - 1;
    if(is_tile_position_in_bounds(nx, ny))
    {
       empty_north = map->tiles[ny][nx] != TILE_TYPE_WALL;
    }
 
    u32 sx = x;
-   u32 sy = y - 1;
+   u32 sy = y + 1;
    if(is_tile_position_in_bounds(sx, sy))
    {
       empty_south = map->tiles[sy][sx] != TILE_TYPE_WALL;
@@ -581,8 +584,8 @@ function struct movement_result move_player(struct game_level *level, enum playe
 
       switch(direction)
       {
-         case PLAYER_DIRECTION_UP:    {potential_box_tiley++;} break;
-         case PLAYER_DIRECTION_DOWN:  {potential_box_tiley--;} break;
+         case PLAYER_DIRECTION_UP:    {potential_box_tiley--;} break;
+         case PLAYER_DIRECTION_DOWN:  {potential_box_tiley++;} break;
          case PLAYER_DIRECTION_LEFT:  {potential_box_tilex--;} break;
          case PLAYER_DIRECTION_RIGHT: {potential_box_tilex++;} break;
       }
@@ -605,8 +608,8 @@ function struct movement_result move_player(struct game_level *level, enum playe
 
       switch(direction)
       {
-         case PLAYER_DIRECTION_UP:    {py++;} break;
-         case PLAYER_DIRECTION_DOWN:  {py--;} break;
+         case PLAYER_DIRECTION_UP:    {py--;} break;
+         case PLAYER_DIRECTION_DOWN:  {py++;} break;
          case PLAYER_DIRECTION_LEFT:  {px--;} break;
          case PLAYER_DIRECTION_RIGHT: {px++;} break;
       }
@@ -643,8 +646,8 @@ function struct movement_result move_player(struct game_level *level, enum playe
 
             switch(direction)
             {
-               case PLAYER_DIRECTION_UP:    {by++;} break;
-               case PLAYER_DIRECTION_DOWN:  {by--;} break;
+               case PLAYER_DIRECTION_UP:    {by--;} break;
+               case PLAYER_DIRECTION_DOWN:  {by++;} break;
                case PLAYER_DIRECTION_LEFT:  {bx--;} break;
                case PLAYER_DIRECTION_RIGHT: {bx++;} break;
             }

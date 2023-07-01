@@ -494,7 +494,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    BITMAPINFOHEADER bitmap_header = {0};
    bitmap_header.biSize = sizeof(BITMAPINFOHEADER);
    bitmap_header.biWidth = bitmap.width;
-   bitmap_header.biHeight = (s32)bitmap.height; // NOTE(law): Negative will indicate a top-down bitmap.
+   bitmap_header.biHeight = -(s32)bitmap.height; // NOTE(law): Negative will indicate a top-down bitmap.
    bitmap_header.biPlanes = 1;
    bitmap_header.biBitCount = 32;
    bitmap_header.biCompression = BI_RGB;
