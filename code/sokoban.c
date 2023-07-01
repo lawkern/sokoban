@@ -712,18 +712,18 @@ function struct movement_result move_player(struct game_level *level, enum playe
 
 function void immediate_bitmap(struct render_bitmap *destination, struct render_bitmap source, float screenx, float screeny)
 {
+   s32 render_width  = TILE_DIMENSION_PIXELS;
+   s32 render_height = TILE_DIMENSION_PIXELS;
+
    s32 minx = (s32)screenx;
    s32 miny = (s32)screeny;
-   s32 maxx = minx + TILE_DIMENSION_PIXELS - 1;
-   s32 maxy = miny + TILE_DIMENSION_PIXELS - 1;
+   s32 maxx = minx + render_width + 1;
+   s32 maxy = miny + render_width + 1;
 
    if(minx < 0) minx = 0;
    if(miny < 0) miny = 0;
    if(maxx >= (s32)destination->width)  maxx = destination->width - 1;
    if(maxy >= (s32)destination->height) maxy = destination->height - 1;
-
-   s32 render_width = maxx - minx;
-   s32 render_height = maxy - miny;
 
    for(s32 destinationy = miny; destinationy <= maxy; ++destinationy)
    {
@@ -732,16 +732,16 @@ function void immediate_bitmap(struct render_bitmap *destination, struct render_
          s32 relative_destinationx = destinationx - minx;
          s32 relative_destinationy = destinationy - miny;
 
-         float u = (float)relative_destinationx / (float)(render_width - 1);
-         float v = (float)relative_destinationy / (float)(render_height - 1);
+         float u = (float)relative_destinationx / (float)render_width;
+         float v = (float)relative_destinationy / (float)render_height;
 
          if(u < 0.0f) u = 0.0f;
          if(u > 1.0f) u = 1.0f;
          if(v < 0.0f) v = 0.0f;
          if(v > 1.0f) v = 1.0f;
 
-         u32 sourcex = (u32)(u * (source.width - 1));
-         u32 sourcey = (u32)(v * (source.height - 1));
+         u32 sourcex = 1 + (u32)(u * (source.width - 2));
+         u32 sourcey = 1 + (u32)(v * (source.height - 2));
 
          assert(sourcex >= 0 && sourcex < source.width);
          assert(sourcey >= 0 && sourcey < source.height);
