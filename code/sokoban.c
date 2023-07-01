@@ -18,6 +18,7 @@
 
 #define MINIMUM(a, b) ((a) < (b) ? (a) : (b))
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
+#define LERP(a, t, b) (((1.0f - (t)) * (a)) + ((t) * (b)))
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -202,7 +203,6 @@ struct game_level
 struct movement_result
 {
    // TODO(law): This can be compressed down a lot if we ever care.
-
    u32 initial_player_tilex;
    u32 initial_player_tiley;
 
@@ -214,6 +214,9 @@ struct movement_result
 
    u32 final_box_tilex;
    u32 final_box_tiley;
+
+   bool is_player_moving;
+   bool is_box_moving;
 };
 
 struct game_state
@@ -691,26 +694,67 @@ function struct movement_result move_player(struct game_level *level, enum playe
       break;
    }
 
+   if(result.final_player_tilex != result.initial_player_tilex ||
+      result.final_player_tiley != result.initial_player_tiley)
+   {
+      result.is_player_moving = true;
+   }
+
+   if(result.final_box_tilex != result.initial_box_tilex ||
+      result.final_box_tiley != result.initial_box_tiley)
+   {
+      result.is_box_moving = true;
+   }
+
+
    return(result);
 }
 
-function void immediate_bitmap(struct render_bitmap *destination, struct render_bitmap source, u32 posx, u32 posy)
+function void immediate_bitmap(struct render_bitmap *destination, struct render_bitmap source, float screenx, float screeny)
 {
-   for(u32 y = 0; y < source.height; ++y)
+   s32 minx = (s32)screenx;
+   s32 miny = (s32)screeny;
+   s32 maxx = minx + TILE_DIMENSION_PIXELS - 1;
+   s32 maxy = miny + TILE_DIMENSION_PIXELS - 1;
+
+   if(minx < 0) minx = 0;
+   if(miny < 0) miny = 0;
+   if(maxx >= (s32)destination->width)  maxx = destination->width - 1;
+   if(maxy >= (s32)destination->height) maxy = destination->height - 1;
+
+   s32 render_width = maxx - minx;
+   s32 render_height = maxy - miny;
+
+   for(s32 destinationy = miny; destinationy <= maxy; ++destinationy)
    {
-      for(u32 x = 0; x < source.width; ++x)
+      for(s32 destinationx = minx; destinationx <= maxx; ++destinationx)
       {
-         u32 destinationx = posx + x;
-         u32 destinationy = posy + y;
-         u32 destination_index = (destinationy * destination->width) + destinationx;
+         s32 relative_destinationx = destinationx - minx;
+         s32 relative_destinationy = destinationy - miny;
 
-         u32 source_color = source.memory[(y * source.width) + x];
-         u8 sr = (source_color >> 16) & 0xFF;
-         u8 sg = (source_color >>  8) & 0xFF;
-         u8 sb = (source_color >>  0) & 0xFF;
-         u8 sa = (source_color >> 24) & 0xFF;
+         float u = (float)relative_destinationx / (float)(render_width - 1);
+         float v = (float)relative_destinationy / (float)(render_height - 1);
 
-         u32 destination_color = destination->memory[destination_index];
+         if(u < 0.0f) u = 0.0f;
+         if(u > 1.0f) u = 1.0f;
+         if(v < 0.0f) v = 0.0f;
+         if(v > 1.0f) v = 1.0f;
+
+         u32 sourcex = (u32)(u * (source.width - 1));
+         u32 sourcey = (u32)(v * (source.height - 1));
+
+         assert(sourcex >= 0 && sourcex < source.width);
+         assert(sourcey >= 0 && sourcey < source.height);
+
+         u32 source_color = source.memory[(sourcey * source.width) + sourcex];
+         float sr = (float)((source_color >> 16) & 0xFF);
+         float sg = (float)((source_color >>  8) & 0xFF);
+         float sb = (float)((source_color >>  0) & 0xFF);
+         float sa = (float)((source_color >> 24) & 0xFF);
+
+         u32 *destination_pixel = destination->memory + (destinationy * destination->width) + destinationx;
+
+         u32 destination_color = *destination_pixel;
          u8 dr = (destination_color >> 16) & 0xFF;
          u8 dg = (destination_color >>  8) & 0xFF;
          u8 db = (destination_color >>  0) & 0xFF;
@@ -718,27 +762,28 @@ function void immediate_bitmap(struct render_bitmap *destination, struct render_
 
          float alpha = (float)sa / 255.0f;
 
-         u8 r = (u8)(((1.0f - alpha) * (float)dr) + (alpha * (float)sr));
-         u8 g = (u8)(((1.0f - alpha) * (float)dg) + (alpha * (float)sg));
-         u8 b = (u8)(((1.0f - alpha) * (float)db) + (alpha * (float)sb));
-         u8 a = da;
+         float r = LERP(dr, alpha, sr);
+         float g = LERP(dg, alpha, sg);
+         float b = LERP(db, alpha, sb);
+         float a = da;
 
-         u32 color = ((r << 16) | (g << 8) | (b << 0) | (a << 24));
-         destination->memory[destination_index] = color;
+         u32 color = (((u32)(r + 0.5f) << 16) |
+                      ((u32)(g + 0.5f) << 8) |
+                      ((u32)(b + 0.5f) << 0) |
+                      ((u32)(a + 0.5f) << 24));
+
+         *destination_pixel = color;
       }
    }
 }
 
-function void immediate_tile(struct render_bitmap *destination, u32 posx, u32 posy, u32 color)
+function void immediate_rectangle(struct render_bitmap *destination, u32 screenx, u32 screeny, u32 width, u32 height, u32 color)
 {
-   for(u32 y = 0; y < TILE_DIMENSION_PIXELS; ++y)
+   for(u32 y = screeny; y < height; ++y)
    {
-      for(u32 x = 0; x < TILE_DIMENSION_PIXELS; ++x)
+      for(u32 x = screenx; x < width; ++x)
       {
-         u32 destinationx = posx + x;
-         u32 destinationy = posy + y;
-         u32 destination_index = (destinationy * destination->width) + destinationx;
-
+         u32 destination_index = (y * destination->width) + x;
          destination->memory[destination_index] = color;
       }
    }
@@ -846,23 +891,24 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
       if(was_pressed(input->move_up))
       {
-         gs->player_animation_seconds_remaining = animation_length_in_seconds;
          gs->movement = move_player(level, PLAYER_DIRECTION_UP, movement);
       }
       else if(was_pressed(input->move_down))
       {
-         gs->player_animation_seconds_remaining = animation_length_in_seconds;
          gs->movement = move_player(level, PLAYER_DIRECTION_DOWN, movement);
       }
       else if(was_pressed(input->move_left))
       {
-         gs->player_animation_seconds_remaining = animation_length_in_seconds;
          gs->movement = move_player(level, PLAYER_DIRECTION_LEFT, movement);
       }
       else if(was_pressed(input->move_right))
       {
-         gs->player_animation_seconds_remaining = animation_length_in_seconds;
          gs->movement = move_player(level, PLAYER_DIRECTION_RIGHT, movement);
+      }
+
+      if(gs->movement.is_player_moving)
+      {
+         gs->player_animation_seconds_remaining = animation_length_in_seconds;
       }
    }
 
@@ -883,17 +929,18 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
       level = previous_level(gs);
    }
 
+   // NOTE(law): Clear the screen each frame.
+   immediate_rectangle(bitmap, 0, 0, bitmap->width, bitmap->height, 0xFFFF00FF);
+
    // NOTE(law): First render pass for non-animating objects.
-   bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f &&
-                            (gs->movement.final_box_tilex != gs->movement.initial_box_tilex ||
-                             gs->movement.final_box_tiley != gs->movement.initial_box_tiley));
+   bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.is_box_moving);
 
    for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
    {
       for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
       {
-         u32 x = tilex * TILE_DIMENSION_PIXELS;
-         u32 y = tiley * TILE_DIMENSION_PIXELS;
+         float x = (float)tilex * TILE_DIMENSION_PIXELS;
+         float y = (float)tiley * TILE_DIMENSION_PIXELS;
 
          // TODO(law): Avoid drawing the floor in cases where it will be
          // occluded anyway.
@@ -942,8 +989,8 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    }
 
    // NOTE(law): Second render pass for animating objects.
-   u32 playerx = level->map.player_tilex * TILE_DIMENSION_PIXELS;
-   u32 playery = level->map.player_tiley * TILE_DIMENSION_PIXELS;
+   float playerx = (float)level->map.player_tilex * TILE_DIMENSION_PIXELS;
+   float playery = (float)level->map.player_tiley * TILE_DIMENSION_PIXELS;
 
    if(gs->player_animation_seconds_remaining > 0.0f)
    {
@@ -955,8 +1002,15 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
       // TODO(law): Try non-linear interpolations for better game feel.
       float t = gs->player_animation_seconds_remaining / animation_length_in_seconds;
-      playerx = (u32) ((t * initial_playerx) + ((1.0f - t) * final_playerx));
-      playery = (u32) ((t * initial_playery) + ((1.0f - t) * final_playery));
+      if(final_playerx != initial_playerx)
+      {
+         playerx = LERP(final_playerx, t, initial_playerx);
+      }
+      else
+      {
+         assert(final_playery != initial_playery);
+         playery = LERP(final_playery, t, initial_playery);
+      }
 
       if(is_box_animating)
       {
@@ -984,15 +1038,15 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
          float distance_ratio = box_tile_distance / player_tile_distance;
          float box_animation_length_in_seconds = animation_length_in_seconds * distance_ratio;
 
-         u32 boxx = initial_boxx;
-         u32 boxy = initial_boxy;
+         float boxx = (float)initial_boxx;
+         float boxy = (float)initial_boxy;
          bool box_animation_started = (box_animation_length_in_seconds >= gs->player_animation_seconds_remaining);
          if(box_animation_started)
          {
             // TODO(law): Try non-linear interpolations for better game feel.
             float boxt = gs->player_animation_seconds_remaining / box_animation_length_in_seconds;
-            boxx = (u32)((boxt * initial_boxx) + ((1.0f - boxt) * final_boxx));
-            boxy = (u32)((boxt * initial_boxy) + ((1.0f - boxt) * final_boxy));
+            boxx = (boxt * initial_boxx) + ((1.0f - boxt) * final_boxx);
+            boxy = (boxt * initial_boxy) + ((1.0f - boxt) * final_boxy);
          }
 
          // NOTE(law): Don't bother rendering the on-goal version until the
