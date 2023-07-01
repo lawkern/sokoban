@@ -541,7 +541,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          DispatchMessage(&message);
       }
 
-      update(&gs, &bitmap, &input);
+      update(&gs, &bitmap, &input, frame_seconds_elapsed);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);

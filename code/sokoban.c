@@ -176,8 +176,8 @@ enum tile_type
 
 struct tile_map_state
 {
-   u32 playerx;
-   u32 playery;
+   u32 player_tilex;
+   u32 player_tiley;
 
    enum tile_type tiles[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
 };
@@ -199,6 +199,23 @@ struct game_level
    struct tile_map_state undos[256];
 };
 
+struct movement_result
+{
+   // TODO(law): This can be compressed down a lot if we ever care.
+
+   u32 initial_player_tilex;
+   u32 initial_player_tiley;
+
+   u32 final_player_tilex;
+   u32 final_player_tiley;
+
+   u32 initial_box_tilex;
+   u32 initial_box_tiley;
+
+   u32 final_box_tilex;
+   u32 final_box_tiley;
+};
+
 struct game_state
 {
    struct memory_arena arena;
@@ -215,6 +232,9 @@ struct game_state
    struct render_bitmap floor[4];
    struct render_bitmap wall[5];
    struct render_bitmap goal;
+
+   float player_animation_seconds_remaining;
+   struct movement_result movement;
 
    bool is_initialized;
 };
@@ -338,19 +358,19 @@ function enum wall_type get_wall_type(struct tile_map_state *map, u32 x, u32 y)
       empty_west = map->tiles[wy][wx] != TILE_TYPE_WALL;
    }
 
-   if(empty_north && empty_west)
+   if(empty_north && !empty_south && !empty_east && empty_west)
    {
       result = WALL_TYPE_CORNER_NW;
    }
-   else if(empty_north && empty_east)
+   else if(empty_north && !empty_south && empty_east && !empty_west)
    {
       result = WALL_TYPE_CORNER_NE;
    }
-   else if(empty_south && empty_east)
+   else if(!empty_north && empty_south && empty_east && !empty_west)
    {
       result = WALL_TYPE_CORNER_SE;
    }
-   else if(empty_south && empty_west)
+   else if(!empty_north && empty_south && !empty_east && empty_west)
    {
       result = WALL_TYPE_CORNER_SW;
    }
@@ -434,8 +454,8 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
          enum tile_type type = level->map.tiles[y][x];
          if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
          {
-            level->map.playerx = x;
-            level->map.playery = y;
+            level->map.player_tilex = x;
+            level->map.player_tiley = y;
          }
 
          x++;
@@ -464,8 +484,23 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
    }
 }
 
+function void zero_memory(void *memory, size_t size)
+{
+   // TODO(law): Speed this up!!
+   u8 *bytes = (u8 *)memory;
+   for(size_t index = 0; index < size; ++index)
+   {
+      *bytes = 0;
+   }
+}
+
 function void reload_level(struct game_state *gs, struct game_level *level)
 {
+   // TODO(law): Identify other cases where we care about resetting movement and
+   // animation state.
+   gs->player_animation_seconds_remaining = 0;
+   zero_memory(&gs->movement, sizeof(gs->movement));
+
    load_level(gs, level, level->file_path);
 }
 
@@ -476,8 +511,8 @@ function void push_undo(struct game_level *level)
 
    struct tile_map_state *undo = level->undos + level->undo_index;
 
-   undo->playerx = level->map.playerx;
-   undo->playery = level->map.playery;
+   undo->player_tilex = level->map.player_tilex;
+   undo->player_tiley = level->map.player_tiley;
 
    for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
    {
@@ -494,8 +529,8 @@ function void pop_undo(struct game_level *level)
    {
       struct tile_map_state *undo = level->undos + level->undo_index;
 
-      level->map.playerx = undo->playerx;
-      level->map.playery = undo->playery;
+      level->map.player_tilex = undo->player_tilex;
+      level->map.player_tiley = undo->player_tiley;
 
       for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
       {
@@ -525,93 +560,135 @@ enum player_movement
    PLAYER_MOVEMENT_CHARGE,
 };
 
-function void move_player(struct game_level *level, enum player_direction direction, enum player_movement movement)
+function struct movement_result move_player(struct game_level *level, enum player_direction direction, enum player_movement movement)
 {
-   // TODO(law): Using a goto to jump to the beginning of the function is
-   // probably a better choice than recursion, but the constrained board size
-   // means this shouldn't recurse TOO deeply.
+   // TODO(law): This whole thing can be pared down considerably.
 
-   // NOTE(law): Determine initial player position.
-   u32 ox = level->map.playerx;
-   u32 oy = level->map.playery;
+   struct movement_result result = {0};
 
-   enum tile_type o = level->map.tiles[oy][ox];
-   assert(o == TILE_TYPE_PLAYER || o == TILE_TYPE_PLAYER_ON_GOAL);
+   result.initial_player_tilex = result.final_player_tilex = level->map.player_tilex;
+   result.initial_player_tiley = result.final_player_tiley = level->map.player_tiley;
 
-   // NOTE(law): Calculate potential player destination.
-   u32 px = ox;
-   u32 py = oy;
-   switch(direction)
+   u32 potential_box_tilex = result.initial_player_tilex;
+   u32 potential_box_tiley = result.initial_player_tiley;
+   while(is_tile_position_in_bounds(potential_box_tilex, potential_box_tiley))
    {
-      case PLAYER_DIRECTION_UP:    {py++;} break;
-      case PLAYER_DIRECTION_DOWN:  {py--;} break;
-      case PLAYER_DIRECTION_LEFT:  {px--;} break;
-      case PLAYER_DIRECTION_RIGHT: {px++;} break;
-   }
-
-   if(is_tile_position_in_bounds(px, py))
-   {
-      enum tile_type d = level->map.tiles[py][px];
-      if(d == TILE_TYPE_FLOOR || d == TILE_TYPE_GOAL)
+      enum tile_type type = level->map.tiles[potential_box_tiley][potential_box_tilex];
+      if(type == TILE_TYPE_BOX || type == TILE_TYPE_BOX_ON_GOAL)
       {
-         // NOTE(law): If the player destination tile is unoccupied, move
-         // directly there while accounting for goal vs. floor tiles.
-
-         push_undo(level);
-
-         level->map.playerx = px;
-         level->map.playery = py;
-
-         level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-         level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
-
-         if(movement == PLAYER_MOVEMENT_DASH || movement == PLAYER_MOVEMENT_CHARGE)
-         {
-            move_player(level, direction, movement);
-         }
+         break;
       }
-      else if(d == TILE_TYPE_BOX || d == TILE_TYPE_BOX_ON_GOAL)
+
+      switch(direction)
       {
-         // NOTE(law): Calculate potential box destination.
-         u32 bx = px;
-         u32 by = py;
-         switch(direction)
-         {
-            case PLAYER_DIRECTION_UP:    {by++;} break;
-            case PLAYER_DIRECTION_DOWN:  {by--;} break;
-            case PLAYER_DIRECTION_LEFT:  {bx--;} break;
-            case PLAYER_DIRECTION_RIGHT: {bx++;} break;
-         }
+         case PLAYER_DIRECTION_UP:    {potential_box_tiley++;} break;
+         case PLAYER_DIRECTION_DOWN:  {potential_box_tiley--;} break;
+         case PLAYER_DIRECTION_LEFT:  {potential_box_tilex--;} break;
+         case PLAYER_DIRECTION_RIGHT: {potential_box_tilex++;} break;
+      }
+   }
+   result.initial_box_tilex = result.final_box_tilex = potential_box_tilex;
+   result.initial_box_tiley = result.final_box_tiley = potential_box_tiley;
 
-         if(is_tile_position_in_bounds(bx, by))
-         {
-            // NOTE(law): If the player destination tile is a box that can be
-            // moved, move the box and player accounting for goal vs. floor
-            // tiles.
+   while(1)
+   {
+      // NOTE(law): Determine initial player position.
+      u32 ox = level->map.player_tilex;
+      u32 oy = level->map.player_tiley;
 
-            enum tile_type b = level->map.tiles[by][bx];
-            if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
+      enum tile_type initial = level->map.tiles[oy][ox];
+      assert(initial == TILE_TYPE_PLAYER || initial == TILE_TYPE_PLAYER_ON_GOAL);
+
+      // NOTE(law): Calculate potential player destination.
+      u32 px = ox;
+      u32 py = oy;
+
+      switch(direction)
+      {
+         case PLAYER_DIRECTION_UP:    {py++;} break;
+         case PLAYER_DIRECTION_DOWN:  {py--;} break;
+         case PLAYER_DIRECTION_LEFT:  {px--;} break;
+         case PLAYER_DIRECTION_RIGHT: {px++;} break;
+      }
+
+      if(is_tile_position_in_bounds(px, py))
+      {
+         enum tile_type d = level->map.tiles[py][px];
+         if(d == TILE_TYPE_FLOOR || d == TILE_TYPE_GOAL)
+         {
+            // NOTE(law): If the player destination tile is unoccupied, move
+            // directly there while accounting for goal vs. floor tiles.
+
+            push_undo(level);
+
+            level->map.player_tilex = px;
+            level->map.player_tiley = py;
+
+            level->map.tiles[oy][ox] = (initial == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+            level->map.tiles[py][px] = (d == TILE_TYPE_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+
+            result.final_player_tilex = px;
+            result.final_player_tiley = py;
+
+            if(movement == PLAYER_MOVEMENT_DASH || movement == PLAYER_MOVEMENT_CHARGE)
             {
-               if(movement != PLAYER_MOVEMENT_DASH)
+               continue;
+            }
+         }
+         else if(d == TILE_TYPE_BOX || d == TILE_TYPE_BOX_ON_GOAL)
+         {
+            // NOTE(law): Calculate potential box destination.
+            u32 bx = px;
+            u32 by = py;
+
+            switch(direction)
+            {
+               case PLAYER_DIRECTION_UP:    {by++;} break;
+               case PLAYER_DIRECTION_DOWN:  {by--;} break;
+               case PLAYER_DIRECTION_LEFT:  {bx--;} break;
+               case PLAYER_DIRECTION_RIGHT: {bx++;} break;
+            }
+
+            if(is_tile_position_in_bounds(bx, by))
+            {
+               // NOTE(law): If the player destination tile is a box that can be
+               // moved, move the box and player accounting for goal vs. floor
+               // tiles.
+
+               enum tile_type b = level->map.tiles[by][bx];
+               if(b == TILE_TYPE_FLOOR || b == TILE_TYPE_GOAL)
                {
-                  push_undo(level);
-
-                  level->map.playerx = px;
-                  level->map.playery = py;
-
-                  level->map.tiles[oy][ox] = (o == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
-                  level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
-                  level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
-
-                  if(movement == PLAYER_MOVEMENT_CHARGE)
+                  if(movement != PLAYER_MOVEMENT_DASH)
                   {
-                     move_player(level, direction, movement);
+                     push_undo(level);
+
+                     level->map.player_tilex = px;
+                     level->map.player_tiley = py;
+
+                     level->map.tiles[oy][ox] = (initial == TILE_TYPE_PLAYER_ON_GOAL) ? TILE_TYPE_GOAL : TILE_TYPE_FLOOR;
+                     level->map.tiles[py][px] = (d == TILE_TYPE_BOX_ON_GOAL) ? TILE_TYPE_PLAYER_ON_GOAL : TILE_TYPE_PLAYER;
+                     level->map.tiles[by][bx] = (b == TILE_TYPE_GOAL) ? TILE_TYPE_BOX_ON_GOAL : TILE_TYPE_BOX;
+
+                     result.final_player_tilex = px;
+                     result.final_player_tiley = py;
+
+                     result.final_box_tilex = bx;
+                     result.final_box_tiley = by;
+
+                     if(movement == PLAYER_MOVEMENT_CHARGE)
+                     {
+                        continue;
+                     }
                   }
                }
             }
          }
       }
+
+      break;
    }
+
+   return(result);
 }
 
 function void immediate_bitmap(struct render_bitmap *destination, struct render_bitmap source, u32 posx, u32 posy)
@@ -684,16 +761,22 @@ function bool is_level_complete(struct game_level *level)
 function struct game_level *next_level(struct game_state *gs)
 {
    gs->level_index = (gs->level_index + 1) % gs->level_count;
-   return(gs->levels[gs->level_index]);
+   struct game_level *level = gs->levels[gs->level_index];
+
+   reload_level(gs, level);
+   return(level);
 }
 
 function struct game_level *previous_level(struct game_state *gs)
 {
    gs->level_index = (gs->level_index > 0) ? gs->level_index - 1 : gs->level_count - 1;
-   return(gs->levels[gs->level_index]);
+   struct game_level *level = gs->levels[gs->level_index];
+
+   reload_level(gs, level);
+   return(level);
 }
 
-function void update(struct game_state *gs, struct render_bitmap *bitmap, struct game_input *input)
+function void update(struct game_state *gs, struct render_bitmap *bitmap, struct game_input *input, float frame_seconds_elapsed)
 {
    if(!gs->is_initialized)
    {
@@ -706,8 +789,9 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/simple.sok");
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
+      load_level(gs, gs->levels[gs->level_count++], "../data/levels/skull.sok");
 
-      gs->level_index = 0;
+      gs->level_index = 2;
 
       gs->floor[0] = load_bitmap(&gs->arena, "../data/floor00.bmp");
       gs->floor[1] = load_bitmap(&gs->arena, "../data/floor01.bmp");
@@ -733,38 +817,53 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
    if(is_level_complete(level))
    {
-      reload_level(gs, level);
       level = next_level(gs);
    }
 
    // NOTE(law): Process player input.
-   enum player_movement movement = PLAYER_MOVEMENT_WALK;
-   if(is_pressed(input->dash))
+   float animation_length_in_seconds = 0.066f;
+   if(gs->player_animation_seconds_remaining > 0.0f)
    {
-      movement = PLAYER_MOVEMENT_DASH;
+      gs->player_animation_seconds_remaining -= frame_seconds_elapsed;
    }
-   else if(is_pressed(input->charge))
+   else
    {
-      movement = PLAYER_MOVEMENT_CHARGE;
+      gs->player_animation_seconds_remaining = 0.0f;
+      gs->movement = (struct movement_result){0};
+
+      enum player_movement movement = PLAYER_MOVEMENT_WALK;
+      if(is_pressed(input->dash))
+      {
+         movement = PLAYER_MOVEMENT_DASH;
+      }
+      else if(is_pressed(input->charge))
+      {
+         movement = PLAYER_MOVEMENT_CHARGE;
+      }
+
+      if(was_pressed(input->move_up))
+      {
+         gs->player_animation_seconds_remaining = animation_length_in_seconds;
+         gs->movement = move_player(level, PLAYER_DIRECTION_UP, movement);
+      }
+      else if(was_pressed(input->move_down))
+      {
+         gs->player_animation_seconds_remaining = animation_length_in_seconds;
+         gs->movement = move_player(level, PLAYER_DIRECTION_DOWN, movement);
+      }
+      else if(was_pressed(input->move_left))
+      {
+         gs->player_animation_seconds_remaining = animation_length_in_seconds;
+         gs->movement = move_player(level, PLAYER_DIRECTION_LEFT, movement);
+      }
+      else if(was_pressed(input->move_right))
+      {
+         gs->player_animation_seconds_remaining = animation_length_in_seconds;
+         gs->movement = move_player(level, PLAYER_DIRECTION_RIGHT, movement);
+      }
    }
 
-   if(was_pressed(input->move_up))
-   {
-      move_player(level, PLAYER_DIRECTION_UP, movement);
-   }
-   else if(was_pressed(input->move_down))
-   {
-      move_player(level, PLAYER_DIRECTION_DOWN, movement);
-   }
-   else if(was_pressed(input->move_left))
-   {
-      move_player(level, PLAYER_DIRECTION_LEFT, movement);
-   }
-   else if(was_pressed(input->move_right))
-   {
-      move_player(level, PLAYER_DIRECTION_RIGHT, movement);
-   }
-   else if(was_pressed(input->undo))
+   if(was_pressed(input->undo))
    {
       pop_undo(level);
    }
@@ -781,13 +880,15 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
       level = previous_level(gs);
    }
 
-   // NOTE(law): Render tiles.
+   // NOTE(law): First render pass for non-animating objects.
+   bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f &&
+                            (gs->movement.final_box_tilex != gs->movement.initial_box_tilex ||
+                             gs->movement.final_box_tiley != gs->movement.initial_box_tiley));
+
    for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
    {
       for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
       {
-         struct tile_attributes attributes = level->attributes[tiley][tilex];
-
          u32 x = tilex * TILE_DIMENSION_PIXELS;
          u32 y = tiley * TILE_DIMENSION_PIXELS;
 
@@ -796,33 +897,31 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
          // NOTE(law): Draw the floor up front now that we have assets with
          // transparency.
+
+         struct tile_attributes attributes = level->attributes[tiley][tilex];
          immediate_bitmap(bitmap, gs->floor[attributes.floor_index], x, y);
 
          enum tile_type type = level->map.tiles[tiley][tilex];
          switch(type)
          {
-            case TILE_TYPE_FLOOR:
-            {
-            } break;
-
-            case TILE_TYPE_PLAYER:
-            {
-               immediate_bitmap(bitmap, gs->player, x, y);
-            } break;
-
-            case TILE_TYPE_PLAYER_ON_GOAL:
-            {
-               immediate_bitmap(bitmap, gs->player_on_goal, x, y);
-            } break;
-
             case TILE_TYPE_BOX:
             {
-               immediate_bitmap(bitmap, gs->box, x, y);
+               if(!is_box_animating || (tilex != gs->movement.final_box_tilex || tiley != gs->movement.final_box_tiley))
+               {
+                  immediate_bitmap(bitmap, gs->box, x, y);
+               }
             } break;
 
             case TILE_TYPE_BOX_ON_GOAL:
             {
-               immediate_bitmap(bitmap, gs->box_on_goal, x, y);
+               if(!is_box_animating || (tilex != gs->movement.final_box_tilex || tiley != gs->movement.final_box_tiley))
+               {
+                  immediate_bitmap(bitmap, gs->box_on_goal, x, y);
+               }
+               else
+               {
+                  immediate_bitmap(bitmap, gs->goal, x, y);
+               }
             } break;
 
             case TILE_TYPE_WALL:
@@ -831,15 +930,73 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
             } break;
 
             case TILE_TYPE_GOAL:
+            case TILE_TYPE_PLAYER_ON_GOAL:
             {
                immediate_bitmap(bitmap, gs->goal, x, y);
-            } break;
-
-            default:
-            {
-               assert(!"Unhandled tile type.");
             } break;
          }
       }
    }
+
+   // NOTE(law): Second render pass for animating objects.
+   u32 playerx = level->map.player_tilex * TILE_DIMENSION_PIXELS;
+   u32 playery = level->map.player_tiley * TILE_DIMENSION_PIXELS;
+
+   if(gs->player_animation_seconds_remaining > 0.0f)
+   {
+      u32 initial_playerx = gs->movement.initial_player_tilex * TILE_DIMENSION_PIXELS;
+      u32 initial_playery = gs->movement.initial_player_tiley * TILE_DIMENSION_PIXELS;
+
+      u32 final_playerx = gs->movement.final_player_tilex * TILE_DIMENSION_PIXELS;
+      u32 final_playery = gs->movement.final_player_tiley * TILE_DIMENSION_PIXELS;
+
+      // TODO(law): Try non-linear interpolations for better game feel.
+      float t = gs->player_animation_seconds_remaining / animation_length_in_seconds;
+      playerx = (u32) ((t * initial_playerx) + ((1.0f - t) * final_playerx));
+      playery = (u32) ((t * initial_playery) + ((1.0f - t) * final_playery));
+
+      if(is_box_animating)
+      {
+         u32 initial_boxx = gs->movement.initial_box_tilex * TILE_DIMENSION_PIXELS;
+         u32 initial_boxy = gs->movement.initial_box_tiley * TILE_DIMENSION_PIXELS;
+
+         u32 final_boxx = gs->movement.final_box_tilex * TILE_DIMENSION_PIXELS;
+         u32 final_boxy = gs->movement.final_box_tiley * TILE_DIMENSION_PIXELS;
+
+         float player_tile_distance = 0;
+         float box_tile_distance = 0;
+         if(final_playerx != initial_playerx)
+         {
+            player_tile_distance = (float)final_playerx - (float)initial_playerx;
+            box_tile_distance = (float)final_boxx - (float)initial_boxx;
+         }
+         else
+         {
+            player_tile_distance = (float)final_playery - (float)initial_playery;
+            box_tile_distance = (float)final_boxy - (float)initial_boxy;
+         }
+         assert(player_tile_distance);
+         assert(box_tile_distance);
+
+         float distance_ratio = box_tile_distance / player_tile_distance;
+         float box_animation_length_in_seconds = animation_length_in_seconds * distance_ratio;
+
+         u32 boxx = initial_boxx;
+         u32 boxy = initial_boxy;
+         bool box_animation_started = (box_animation_length_in_seconds >= gs->player_animation_seconds_remaining);
+         if(box_animation_started)
+         {
+            // TODO(law): Try non-linear interpolations for better game feel.
+            float boxt = gs->player_animation_seconds_remaining / box_animation_length_in_seconds;
+            boxx = (u32)((boxt * initial_boxx) + ((1.0f - boxt) * final_boxx));
+            boxy = (u32)((boxt * initial_boxy) + ((1.0f - boxt) * final_boxy));
+         }
+
+         // NOTE(law): Don't bother rendering the on-goal version until the
+         // animation is over.
+         immediate_bitmap(bitmap, gs->box, boxx, boxy);
+      }
+   }
+
+   immediate_bitmap(bitmap, gs->player, playerx, playery);
 }
