@@ -16,6 +16,9 @@
 #define RESOLUTION_BASE_WIDTH (SCREEN_TILE_COUNT_X * TILE_DIMENSION_PIXELS)
 #define RESOLUTION_BASE_HEIGHT (SCREEN_TILE_COUNT_Y * TILE_DIMENSION_PIXELS)
 
+#define PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS 0.0666666f
+#define LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS 0.333333f
+
 #define MINIMUM(a, b) ((a) < (b) ? (a) : (b))
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
 #define LERP(a, t, b) (((1.0f - (t)) * (a)) + ((t) * (b)))
@@ -238,6 +241,9 @@ struct game_state
 
    float player_animation_seconds_remaining;
    struct movement_result movement;
+
+   float transition_animation_seconds_remaining;
+   struct render_bitmap completion_snapshot;
 
    bool is_initialized;
 };
@@ -493,10 +499,24 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
 function void zero_memory(void *memory, size_t size)
 {
    // TODO(law): Speed this up!!
+
    u8 *bytes = (u8 *)memory;
-   for(size_t index = 0; index < size; ++index)
+   while(size--)
    {
-      *bytes = 0;
+      *bytes++ = 0;
+   }
+}
+
+function void copy_memory(void *destination, void *source, size_t size)
+{
+   // TODO(law): Speed this up!!
+
+   u8 *destination_bytes = (u8 *)destination;
+   u8 *source_bytes = (u8 *)source;
+
+   while(size--)
+   {
+      *destination_bytes++ = *source_bytes++;
    }
 }
 
@@ -710,49 +730,34 @@ function struct movement_result move_player(struct game_level *level, enum playe
    return(result);
 }
 
-function void immediate_bitmap(struct render_bitmap *destination, struct render_bitmap source, float screenx, float screeny)
+function void immediate_clear(struct render_bitmap destination, u32 color)
 {
-   s32 render_width  = TILE_DIMENSION_PIXELS;
-   s32 render_height = TILE_DIMENSION_PIXELS;
-
-   s32 minx = (s32)screenx;
-   s32 miny = (s32)screeny;
-   s32 maxx = minx + render_width + 1;
-   s32 maxy = miny + render_width + 1;
-
-   if(minx < 0) minx = 0;
-   if(miny < 0) miny = 0;
-   if(maxx >= (s32)destination->width)  maxx = destination->width - 1;
-   if(maxy >= (s32)destination->height) maxy = destination->height - 1;
-
-   for(s32 destinationy = miny; destinationy <= maxy; ++destinationy)
+   for(u32 y = 0; y < destination.height; ++y)
    {
-      for(s32 destinationx = minx; destinationx <= maxx; ++destinationx)
+      for(u32 x = 0; x < destination.width; ++x)
       {
-         s32 relative_destinationx = destinationx - minx;
-         s32 relative_destinationy = destinationy - miny;
+         u32 destination_index = (y * destination.width) + x;
+         destination.memory[destination_index] = color;
+      }
+   }
+}
 
-         float u = (float)relative_destinationx / (float)render_width;
-         float v = (float)relative_destinationy / (float)render_height;
+function void immediate_screen_bitmap(struct render_bitmap destination, struct render_bitmap source, float alpha)
+{
+   assert(destination.width == source.width);
+   assert(destination.height == source.height);
 
-         if(u < 0.0f) u = 0.0f;
-         if(u > 1.0f) u = 1.0f;
-         if(v < 0.0f) v = 0.0f;
-         if(v > 1.0f) v = 1.0f;
-
-         u32 sourcex = 1 + (u32)(u * (source.width - 2));
-         u32 sourcey = 1 + (u32)(v * (source.height - 2));
-
-         assert(sourcex >= 0 && sourcex < source.width);
-         assert(sourcey >= 0 && sourcey < source.height);
-
-         u32 source_color = source.memory[(sourcey * source.width) + sourcex];
+   for(u32 y = 0; y < destination.height; ++y)
+   {
+      for(u32 x = 0; x < destination.width; ++x)
+      {
+         u32 source_color = source.memory[(y * source.width) + x];
          float sr = (float)((source_color >> 16) & 0xFF);
          float sg = (float)((source_color >>  8) & 0xFF);
          float sb = (float)((source_color >>  0) & 0xFF);
          float sa = (float)((source_color >> 24) & 0xFF);
 
-         u32 *destination_pixel = destination->memory + (destinationy * destination->width) + destinationx;
+         u32 *destination_pixel = destination.memory + (y * destination.width) + x;
 
          u32 destination_color = *destination_pixel;
          u8 dr = (destination_color >> 16) & 0xFF;
@@ -760,11 +765,11 @@ function void immediate_bitmap(struct render_bitmap *destination, struct render_
          u8 db = (destination_color >>  0) & 0xFF;
          u8 da = (destination_color >> 24) & 0xFF;
 
-         float alpha = (float)sa / 255.0f;
+         float at = (sa * alpha) / 255.0f;
 
-         float r = LERP(dr, alpha, sr);
-         float g = LERP(dg, alpha, sg);
-         float b = LERP(db, alpha, sb);
+         float r = LERP(dr, at, sr);
+         float g = LERP(dg, at, sg);
+         float b = LERP(db, at, sb);
          float a = da;
 
          u32 color = (((u32)(r + 0.5f) << 16) |
@@ -777,14 +782,97 @@ function void immediate_bitmap(struct render_bitmap *destination, struct render_
    }
 }
 
-function void immediate_rectangle(struct render_bitmap *destination, u32 screenx, u32 screeny, u32 width, u32 height, u32 color)
+// TODO(law): Remove dependency on math.h!
+#include <math.h>
+
+function s32 floor_s32(float value)
 {
-   for(u32 y = screeny; y < height; ++y)
+   s32 result = (s32)floorf(value);
+   return(result);
+}
+
+function s32 ceiling_s32(float value)
+{
+   s32 result = (s32)ceilf(value);
+   return(result);
+}
+
+function void immediate_tile_bitmap(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
+{
+   s32 render_width = TILE_DIMENSION_PIXELS;
+   s32 render_height = TILE_DIMENSION_PIXELS;
+
+   // NOTE(law): Assuming tile size of 32x32: when aligned to pixel boundaries,
+   // x and y should range from 0 to 31 inclusive. This results in writing 32
+   // pixels per row. When unaligned (say 0.5 to 31.5), the range becomes 0 to
+   // 32 inclusive, i.e. 33 pixels per row.
+
+   s32 minx = floor_s32(posx);
+   s32 miny = floor_s32(posy);
+   s32 maxx = ceiling_s32(posx + (float)(render_width - 1));
+   s32 maxy = ceiling_s32(posy + (float)(render_height - 1));
+
+   if(minx < 0) minx = 0;
+   if(miny < 0) miny = 0;
+   if(maxx >= (s32)destination.width)  maxx = destination.width - 1;
+   if(maxy >= (s32)destination.height) maxy = destination.height - 1;
+
+   for(s32 destinationy = miny; destinationy <= maxy; ++destinationy)
    {
-      for(u32 x = screenx; x < width; ++x)
+      for(s32 destinationx = minx; destinationx <= maxx; ++destinationx)
       {
-         u32 destination_index = (y * destination->width) + x;
-         destination->memory[destination_index] = color;
+         s32 x = destinationx - minx;
+         s32 y = destinationy - miny;
+
+         // NOTE(law): The uv values are computed based on how far into the
+         // (hypothetical unclipped) target render area we are. In the case of
+         // an aligned 32x32 tile, they should compute 0/31, 1/31, 2/31,
+         // ... 30/31, 31/31.
+         float u = (float)x / (float)(render_width - 1);
+         float v = (float)y / (float)(render_height - 1);
+
+         if(u < 0.0f) u = 0.0f;
+         if(u > 1.0f) u = 1.0f;
+         if(v < 0.0f) v = 0.0f;
+         if(v > 1.0f) v = 1.0f;
+
+         // NOTE(law): Map u and v into the target bitmap coordinates. Bitmaps
+         // are 18x18, with 16x16 pixels of content surrounded by a 1px
+         // transparent margin. Therefore, u and v of 0.0f should map to 1 and
+         // 1.0f should map to 16.
+         u32 sourcex = 1 + (u32)((u * (source.width - 3)) + 0.5f);
+         u32 sourcey = 1 + (u32)((v * (source.height - 3)) + 0.5f);
+
+         assert(sourcex >= 0 && sourcex < source.width);
+         assert(sourcey >= 0 && sourcey < source.height);
+
+         u32 source_color = source.memory[(sourcey * source.width) + sourcex];
+         float sr = (float)((source_color >> 16) & 0xFF);
+         float sg = (float)((source_color >>  8) & 0xFF);
+         float sb = (float)((source_color >>  0) & 0xFF);
+         float sa = (float)((source_color >> 24) & 0xFF);
+
+         u32 *destination_pixel = destination.memory + (destinationy * destination.width) + destinationx;
+
+         u32 destination_color = *destination_pixel;
+         u8 dr = (destination_color >> 16) & 0xFF;
+         u8 dg = (destination_color >>  8) & 0xFF;
+         u8 db = (destination_color >>  0) & 0xFF;
+         u8 da = (destination_color >> 24) & 0xFF;
+
+         float at = sa / 255.0f;
+
+         float r = LERP(dr, at, sr);
+         float g = LERP(dg, at, sg);
+         float b = LERP(db, at, sb);
+         float a = da;
+
+         u32 color = (((u32)(r + 0.5f) << 16) |
+                      ((u32)(g + 0.5f) << 8) |
+                      ((u32)(b + 0.5f) << 0) |
+                      ((u32)(a + 0.5f) << 24));
+
+         *destination_pixel = color;
       }
    }
 }
@@ -806,25 +894,33 @@ function bool is_level_complete(struct game_level *level)
    return(true);
 }
 
-function struct game_level *next_level(struct game_state *gs)
+function struct game_level *change_level(struct game_state *gs, struct render_bitmap snapshot, u32 index)
+{
+   struct game_level *level = gs->levels[gs->level_index];
+
+   size_t snapshot_size = snapshot.width * snapshot.height * sizeof(u32);
+   copy_memory(gs->completion_snapshot.memory, snapshot.memory, snapshot_size);
+
+   gs->transition_animation_seconds_remaining = LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS;
+
+   reload_level(gs, level);
+   return(level);
+}
+
+function struct game_level *next_level(struct game_state *gs, struct render_bitmap snapshot)
 {
    gs->level_index = (gs->level_index + 1) % gs->level_count;
-   struct game_level *level = gs->levels[gs->level_index];
-
-   reload_level(gs, level);
-   return(level);
+   return change_level(gs, snapshot, gs->level_index);
 }
 
-function struct game_level *previous_level(struct game_state *gs)
+function struct game_level *previous_level(struct game_state *gs, struct render_bitmap snapshot)
 {
    gs->level_index = (gs->level_index > 0) ? gs->level_index - 1 : gs->level_count - 1;
-   struct game_level *level = gs->levels[gs->level_index];
-
-   reload_level(gs, level);
-   return(level);
+   return change_level(gs, snapshot, gs->level_index);
 }
 
-function void update(struct game_state *gs, struct render_bitmap *bitmap, struct game_input *input, float frame_seconds_elapsed)
+function void update(struct game_state *gs, struct render_bitmap render_output,
+                     struct game_input *input, float frame_seconds_elapsed)
 {
    if(!gs->is_initialized)
    {
@@ -858,25 +954,36 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
       gs->box_on_goal    = load_bitmap(&gs->arena, "../data/box_on_goal.bmp");
       gs->goal           = load_bitmap(&gs->arena, "../data/goal.bmp");
 
+      size_t bitmap_size = render_output.width * render_output.height * sizeof(u32);
+
+      gs->completion_snapshot.width  = render_output.width;
+      gs->completion_snapshot.height = render_output.height;
+      gs->completion_snapshot.memory = ALLOCATE(&gs->arena, bitmap_size);
+
       gs->is_initialized = true;
    }
 
    struct game_level *level = gs->levels[gs->level_index];
 
-   if(is_level_complete(level))
-   {
-      level = next_level(gs);
-   }
-
    // NOTE(law): Process player input.
-   float animation_length_in_seconds = 0.066f;
    if(gs->player_animation_seconds_remaining > 0.0f)
    {
       gs->player_animation_seconds_remaining -= frame_seconds_elapsed;
    }
+   else if(gs->transition_animation_seconds_remaining > 0.0f)
+   {
+      gs->transition_animation_seconds_remaining -= frame_seconds_elapsed;
+   }
    else
    {
       gs->player_animation_seconds_remaining = 0.0f;
+      gs->transition_animation_seconds_remaining = 0.0f;
+
+      if(is_level_complete(level))
+      {
+         level = next_level(gs, render_output);
+      }
+
       gs->movement = (struct movement_result){0};
 
       enum player_movement movement = PLAYER_MOVEMENT_WALK;
@@ -908,7 +1015,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
       if(gs->movement.is_player_moving)
       {
-         gs->player_animation_seconds_remaining = animation_length_in_seconds;
+         gs->player_animation_seconds_remaining = PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
       }
    }
 
@@ -922,15 +1029,15 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
    }
    else if(was_pressed(input->next))
    {
-      level = next_level(gs);
+      level = next_level(gs, render_output);
    }
    else if(was_pressed(input->previous))
    {
-      level = previous_level(gs);
+      level = previous_level(gs, render_output);
    }
 
    // NOTE(law): Clear the screen each frame.
-   immediate_rectangle(bitmap, 0, 0, bitmap->width, bitmap->height, 0xFFFF00FF);
+   immediate_clear(render_output, 0xFFFF00FF);
 
    // NOTE(law): First render pass for non-animating objects.
    bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.is_box_moving);
@@ -949,7 +1056,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
          // transparency.
 
          struct tile_attributes attributes = level->attributes[tiley][tilex];
-         immediate_bitmap(bitmap, gs->floor[attributes.floor_index], x, y);
+         immediate_tile_bitmap(render_output, gs->floor[attributes.floor_index], x, y);
 
          enum tile_type type = level->map.tiles[tiley][tilex];
          switch(type)
@@ -958,7 +1065,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
             {
                if(!is_box_animating || (tilex != gs->movement.final_box_tilex || tiley != gs->movement.final_box_tiley))
                {
-                  immediate_bitmap(bitmap, gs->box, x, y);
+                  immediate_tile_bitmap(render_output, gs->box, x, y);
                }
             } break;
 
@@ -966,23 +1073,23 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
             {
                if(!is_box_animating || (tilex != gs->movement.final_box_tilex || tiley != gs->movement.final_box_tiley))
                {
-                  immediate_bitmap(bitmap, gs->box_on_goal, x, y);
+                  immediate_tile_bitmap(render_output, gs->box_on_goal, x, y);
                }
                else
                {
-                  immediate_bitmap(bitmap, gs->goal, x, y);
+                  immediate_tile_bitmap(render_output, gs->goal, x, y);
                }
             } break;
 
             case TILE_TYPE_WALL:
             {
-               immediate_bitmap(bitmap, gs->wall[attributes.wall_index], x, y);
+               immediate_tile_bitmap(render_output, gs->wall[attributes.wall_index], x, y);
             } break;
 
             case TILE_TYPE_GOAL:
             case TILE_TYPE_PLAYER_ON_GOAL:
             {
-               immediate_bitmap(bitmap, gs->goal, x, y);
+               immediate_tile_bitmap(render_output, gs->goal, x, y);
             } break;
          }
       }
@@ -1001,7 +1108,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
       u32 final_playery = gs->movement.final_player_tiley * TILE_DIMENSION_PIXELS;
 
       // TODO(law): Try non-linear interpolations for better game feel.
-      float t = gs->player_animation_seconds_remaining / animation_length_in_seconds;
+      float t = gs->player_animation_seconds_remaining / PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
       if(final_playerx != initial_playerx)
       {
          playerx = LERP(final_playerx, t, initial_playerx);
@@ -1036,7 +1143,7 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
          assert(box_tile_distance);
 
          float distance_ratio = box_tile_distance / player_tile_distance;
-         float box_animation_length_in_seconds = animation_length_in_seconds * distance_ratio;
+         float box_animation_length_in_seconds = PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS * distance_ratio;
 
          float boxx = (float)initial_boxx;
          float boxy = (float)initial_boxy;
@@ -1051,9 +1158,15 @@ function void update(struct game_state *gs, struct render_bitmap *bitmap, struct
 
          // NOTE(law): Don't bother rendering the on-goal version until the
          // animation is over.
-         immediate_bitmap(bitmap, gs->box, boxx, boxy);
+         immediate_tile_bitmap(render_output, gs->box, boxx, boxy);
       }
    }
 
-   immediate_bitmap(bitmap, gs->player, playerx, playery);
+   immediate_tile_bitmap(render_output, gs->player, playerx, playery);
+
+   if(gs->transition_animation_seconds_remaining > 0)
+   {
+      float alpha = gs->transition_animation_seconds_remaining / LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS;
+      immediate_screen_bitmap(render_output, gs->completion_snapshot, alpha);
+   }
 }
