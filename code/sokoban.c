@@ -1287,9 +1287,20 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
             boxy = LERP(final_boxy, boxt, initial_boxy);
          }
 
-         // NOTE(law): Don't bother rendering the on-goal version until the
-         // animation is over.
-         immediate_tile_bitmap(render_output, gs->box, boxx, boxy);
+         // NOTE(law): Render the on-goal version if the box was previously on a
+         // goal (i.e. the old position is now one of the other goal types).
+         u32 initial_box_tilex = gs->movement.initial_box_tilex;
+         u32 initial_box_tiley = gs->movement.initial_box_tiley;
+
+         enum tile_type previous = level->map.tiles[initial_box_tiley][initial_box_tilex];
+         if(previous == TILE_TYPE_GOAL || previous == TILE_TYPE_PLAYER_ON_GOAL)
+         {
+            immediate_tile_bitmap(render_output, gs->box_on_goal, boxx, boxy);
+         }
+         else
+         {
+            immediate_tile_bitmap(render_output, gs->box, boxx, boxy);
+         }
       }
    }
 
