@@ -13,6 +13,11 @@
 #define SCREEN_TILE_COUNT_Y 20
 #define TILE_DIMENSION_PIXELS 32
 
+#define RENDER_TILE_COUNT_X 6
+#define RENDER_TILE_COUNT_Y 4
+#define TILES_PER_RENDER_TILE_X (SCREEN_TILE_COUNT_X / RENDER_TILE_COUNT_X)
+#define TILES_PER_RENDER_TILE_Y (SCREEN_TILE_COUNT_Y / RENDER_TILE_COUNT_Y)
+
 #define RESOLUTION_BASE_WIDTH (SCREEN_TILE_COUNT_X * TILE_DIMENSION_PIXELS)
 #define RESOLUTION_BASE_HEIGHT (SCREEN_TILE_COUNT_Y * TILE_DIMENSION_PIXELS)
 
@@ -44,6 +49,38 @@ function PLATFORM_FREE_FILE(platform_free_file);
 
 #define PLATFORM_LOAD_FILE(name) struct platform_file name(char *file_path)
 function PLATFORM_LOAD_FILE(platform_load_file);
+
+struct platform_work_queue;
+
+#define PLATFORM_QUEUE_CALLBACK(name) void name(struct platform_work_queue *queue, void *data)
+typedef PLATFORM_QUEUE_CALLBACK(queue_callback);
+
+struct queue_entry
+{
+   void *data;
+   queue_callback *callback;
+};
+
+struct platform_work_queue
+{
+   volatile u32 read_index;
+   volatile u32 write_index;
+
+   volatile u32 completion_target;
+   volatile u32 completion_count;
+
+   // NOTE(law): Each platform should typedef the appropriate platform-specific
+   // semaphore type to platform_semaphore before #include'ing this file.
+   platform_semaphore semaphore;
+
+   struct queue_entry entries[512];
+};
+
+#define PLATFORM_ENQUEUE_WORK(name) void name(struct platform_work_queue *queue, void *data, queue_callback *callback)
+function PLATFORM_ENQUEUE_WORK(platform_enqueue_work);
+
+#define PLATFORM_COMPLETE_QUEUE(name) void name(struct platform_work_queue *queue)
+function PLATFORM_COMPLETE_QUEUE(platform_complete_queue);
 
 struct render_bitmap
 {
@@ -951,8 +988,114 @@ function struct game_level *previous_level(struct game_state *gs, struct render_
    return change_level(gs, snapshot, gs->level_index);
 }
 
-function void update(struct game_state *gs, struct render_bitmap render_output,
-                     struct game_input *input, float frame_seconds_elapsed)
+function bool is_player_animating(struct game_state *gs)
+{
+   bool result = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.player_tile_delta > 0);
+   return(result);
+}
+
+function bool is_any_box_animating(struct game_state *gs)
+{
+   bool result = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.box_tile_delta > 0);
+   return(result);
+}
+
+function bool is_this_box_animating(struct game_state *gs, u32 tilex, u32 tiley)
+{
+   bool result = is_any_box_animating(gs);
+   if(result)
+   {
+      result = (tilex == gs->movement.final_box_tilex && tiley == gs->movement.final_box_tiley);
+   }
+   return(result);
+}
+
+function bool is_level_transition_animating(struct game_state *gs)
+{
+   bool result = (gs->transition_animation_seconds_remaining > 0.0f);
+   return(result);
+}
+
+struct render_tile_data
+{
+   struct render_bitmap render_output;
+   struct game_state *gs;
+
+   u32 min_tilex;
+   u32 min_tiley;
+   u32 max_tilex;
+   u32 max_tiley;
+};
+
+function void render_stationary_tiles(struct render_bitmap render_output, struct game_state *gs,
+                                      u32 min_tilex, u32 min_tiley, u32 max_tilex, u32 max_tiley)
+{
+   struct game_level *level = gs->levels[gs->level_index];
+
+   for(u32 tiley = min_tiley; tiley <= max_tiley; ++tiley)
+   {
+      for(u32 tilex = min_tilex; tilex <= max_tilex; ++tilex)
+      {
+         float x = (float)tilex * TILE_DIMENSION_PIXELS;
+         float y = (float)tiley * TILE_DIMENSION_PIXELS;
+
+         // NOTE(law): Draw the floor up front now that we have assets with
+         // transparency.
+
+         // TODO(law): Avoid drawing the floor in cases where it will be
+         // occluded anyway.
+
+         struct tile_attributes attributes = level->attributes[tiley][tilex];
+         immediate_tile_bitmap(render_output, gs->floor[attributes.floor_index], x, y);
+
+         enum tile_type type = level->map.tiles[tiley][tilex];
+         switch(type)
+         {
+            case TILE_TYPE_BOX:
+            {
+               if(!is_this_box_animating(gs, tilex, tiley))
+               {
+                  immediate_tile_bitmap(render_output, gs->box, x, y);
+               }
+            } break;
+
+            case TILE_TYPE_BOX_ON_GOAL:
+            {
+               if(!is_this_box_animating(gs, tilex, tiley))
+               {
+                  immediate_tile_bitmap(render_output, gs->box_on_goal, x, y);
+               }
+               else
+               {
+                  immediate_tile_bitmap(render_output, gs->goal, x, y);
+               }
+            } break;
+
+            case TILE_TYPE_WALL:
+            {
+               immediate_tile_bitmap(render_output, gs->wall[attributes.wall_index], x, y);
+            } break;
+
+            case TILE_TYPE_GOAL:
+            case TILE_TYPE_PLAYER_ON_GOAL:
+            {
+               immediate_tile_bitmap(render_output, gs->goal, x, y);
+            } break;
+         }
+      }
+   }
+}
+
+function PLATFORM_QUEUE_CALLBACK(render_stationary_tiles_callback)
+{
+   struct render_tile_data *render_tile = (struct render_tile_data *)data;
+   render_stationary_tiles(render_tile->render_output, render_tile->gs,
+                           render_tile->min_tilex, render_tile->min_tiley,
+                           render_tile->max_tilex, render_tile->max_tiley);
+}
+
+function void update(struct game_state *gs, struct render_bitmap render_output, struct game_input *input,
+                     struct platform_work_queue *queue, float frame_seconds_elapsed)
 {
    if(!gs->is_initialized)
    {
@@ -997,17 +1140,17 @@ function void update(struct game_state *gs, struct render_bitmap render_output,
 
    struct game_level *level = gs->levels[gs->level_index];
 
-   // NOTE(law): Process player input.
-   if(gs->player_animation_seconds_remaining > 0.0f)
+   if(is_player_animating(gs))
    {
       gs->player_animation_seconds_remaining -= frame_seconds_elapsed;
    }
-   else if(gs->transition_animation_seconds_remaining > 0.0f)
+   else if(is_level_transition_animating(gs))
    {
       gs->transition_animation_seconds_remaining -= frame_seconds_elapsed;
    }
    else
    {
+      // NOTE(law): Process player input.
       gs->player_animation_seconds_remaining = 0.0f;
       gs->transition_animation_seconds_remaining = 0.0f;
 
@@ -1072,66 +1215,42 @@ function void update(struct game_state *gs, struct render_bitmap render_output,
    immediate_clear(render_output, 0xFFFF00FF);
 
    // NOTE(law): First render pass for non-animating objects.
-   bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.box_tile_delta > 0);
+   struct render_tile_data render_tiles[RENDER_TILE_COUNT_X * RENDER_TILE_COUNT_Y];
 
-   for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
+   assert((SCREEN_TILE_COUNT_X % RENDER_TILE_COUNT_X) == 0);
+   assert((SCREEN_TILE_COUNT_Y % RENDER_TILE_COUNT_Y) == 0);
+
+   u32 tile_index = 0;
+   for(u32 y = 0; y < RENDER_TILE_COUNT_Y; ++y)
    {
-      for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
+      u32 min_tiley = TILES_PER_RENDER_TILE_Y * y;
+      u32 max_tiley = MINIMUM(min_tiley + TILES_PER_RENDER_TILE_Y - 1, SCREEN_TILE_COUNT_Y - 1);
+
+      for(u32 x = 0; x < RENDER_TILE_COUNT_X; ++x)
       {
-         float x = (float)tilex * TILE_DIMENSION_PIXELS;
-         float y = (float)tiley * TILE_DIMENSION_PIXELS;
+         assert(tile_index < (RENDER_TILE_COUNT_X * RENDER_TILE_COUNT_Y));
+         struct render_tile_data *data = render_tiles + tile_index++;
 
-         // TODO(law): Avoid drawing the floor in cases where it will be
-         // occluded anyway.
+         u32 min_tilex = TILES_PER_RENDER_TILE_X * x;
+         u32 max_tilex = MINIMUM(min_tilex + TILES_PER_RENDER_TILE_X - 1, SCREEN_TILE_COUNT_X - 1);
 
-         // NOTE(law): Draw the floor up front now that we have assets with
-         // transparency.
+         data->render_output = render_output;
+         data->gs = gs;
+         data->min_tilex = min_tilex;
+         data->min_tiley = min_tiley;
+         data->max_tilex = max_tilex;
+         data->max_tiley = max_tiley;
 
-         struct tile_attributes attributes = level->attributes[tiley][tilex];
-         immediate_tile_bitmap(render_output, gs->floor[attributes.floor_index], x, y);
-
-         enum tile_type type = level->map.tiles[tiley][tilex];
-         switch(type)
-         {
-            case TILE_TYPE_BOX:
-            {
-               if(!is_box_animating || (tilex != gs->movement.final_box_tilex || tiley != gs->movement.final_box_tiley))
-               {
-                  immediate_tile_bitmap(render_output, gs->box, x, y);
-               }
-            } break;
-
-            case TILE_TYPE_BOX_ON_GOAL:
-            {
-               if(!is_box_animating || (tilex != gs->movement.final_box_tilex || tiley != gs->movement.final_box_tiley))
-               {
-                  immediate_tile_bitmap(render_output, gs->box_on_goal, x, y);
-               }
-               else
-               {
-                  immediate_tile_bitmap(render_output, gs->goal, x, y);
-               }
-            } break;
-
-            case TILE_TYPE_WALL:
-            {
-               immediate_tile_bitmap(render_output, gs->wall[attributes.wall_index], x, y);
-            } break;
-
-            case TILE_TYPE_GOAL:
-            case TILE_TYPE_PLAYER_ON_GOAL:
-            {
-               immediate_tile_bitmap(render_output, gs->goal, x, y);
-            } break;
-         }
+         platform_enqueue_work(queue, data, render_stationary_tiles_callback);
       }
    }
+   platform_complete_queue(queue);
 
    // NOTE(law): Second render pass for animating objects.
    float playerx = (float)level->map.player_tilex * TILE_DIMENSION_PIXELS;
    float playery = (float)level->map.player_tiley * TILE_DIMENSION_PIXELS;
 
-   if(gs->player_animation_seconds_remaining > 0.0f)
+   if(is_player_animating(gs))
    {
       u32 initial_playerx = gs->movement.initial_player_tilex * TILE_DIMENSION_PIXELS;
       u32 initial_playery = gs->movement.initial_player_tiley * TILE_DIMENSION_PIXELS;
@@ -1140,52 +1259,32 @@ function void update(struct game_state *gs, struct render_bitmap render_output,
       u32 final_playery = gs->movement.final_player_tiley * TILE_DIMENSION_PIXELS;
 
       // TODO(law): Try non-linear interpolations for better game feel.
-      float t = gs->player_animation_seconds_remaining / PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
-      if(final_playerx != initial_playerx)
+      float playert = gs->player_animation_seconds_remaining / PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
+      playerx = LERP(final_playerx, playert, initial_playerx);
+      playery = LERP(final_playery, playert, initial_playery);
+
+      if(is_any_box_animating(gs))
       {
-         playerx = LERP(final_playerx, t, initial_playerx);
-      }
-      else
-      {
-         assert(final_playery != initial_playery);
-         playery = LERP(final_playery, t, initial_playery);
-      }
+         assert(gs->movement.player_tile_delta);
+         assert(gs->movement.box_tile_delta);
 
-      if(is_box_animating)
-      {
-         u32 initial_boxx = gs->movement.initial_box_tilex * TILE_DIMENSION_PIXELS;
-         u32 initial_boxy = gs->movement.initial_box_tiley * TILE_DIMENSION_PIXELS;
-
-         u32 final_boxx = gs->movement.final_box_tilex * TILE_DIMENSION_PIXELS;
-         u32 final_boxy = gs->movement.final_box_tiley * TILE_DIMENSION_PIXELS;
-
-         float player_tile_distance = 0;
-         float box_tile_distance = 0;
-         if(final_playerx != initial_playerx)
-         {
-            player_tile_distance = (float)final_playerx - (float)initial_playerx;
-            box_tile_distance = (float)final_boxx - (float)initial_boxx;
-         }
-         else
-         {
-            player_tile_distance = (float)final_playery - (float)initial_playery;
-            box_tile_distance = (float)final_boxy - (float)initial_boxy;
-         }
-         assert(player_tile_distance);
-         assert(box_tile_distance);
-
-         float distance_ratio = box_tile_distance / player_tile_distance;
+         float distance_ratio = (float)gs->movement.box_tile_delta / (float)gs->movement.player_tile_delta;
          float box_animation_length_in_seconds = PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS * distance_ratio;
 
-         float boxx = (float)initial_boxx;
-         float boxy = (float)initial_boxy;
-         bool box_animation_started = (box_animation_length_in_seconds >= gs->player_animation_seconds_remaining);
-         if(box_animation_started)
+         float initial_boxx = (float)gs->movement.initial_box_tilex * TILE_DIMENSION_PIXELS;
+         float initial_boxy = (float)gs->movement.initial_box_tiley * TILE_DIMENSION_PIXELS;
+
+         float final_boxx = (float)gs->movement.final_box_tilex * TILE_DIMENSION_PIXELS;
+         float final_boxy = (float)gs->movement.final_box_tiley * TILE_DIMENSION_PIXELS;
+
+         float boxx = initial_boxx;
+         float boxy = initial_boxy;
+         if(box_animation_length_in_seconds >= gs->player_animation_seconds_remaining)
          {
             // TODO(law): Try non-linear interpolations for better game feel.
             float boxt = gs->player_animation_seconds_remaining / box_animation_length_in_seconds;
-            boxx = (boxt * initial_boxx) + ((1.0f - boxt) * final_boxx);
-            boxy = (boxt * initial_boxy) + ((1.0f - boxt) * final_boxy);
+            boxx = LERP(final_boxx, boxt, initial_boxx);
+            boxy = LERP(final_boxy, boxt, initial_boxy);
          }
 
          // NOTE(law): Don't bother rendering the on-goal version until the

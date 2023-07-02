@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <stdio.h>
 
+typedef HANDLE platform_semaphore;
 #include "sokoban.c"
 
 #define WIN32_LOG_MAX_LENGTH 1024
@@ -90,6 +91,77 @@ function PLATFORM_LOAD_FILE(platform_load_file)
 
    return(result);
 }
+
+function PLATFORM_ENQUEUE_WORK(platform_enqueue_work)
+{
+   u32 new_write_index = (queue->write_index + 1) % ARRAY_LENGTH(queue->entries);
+   assert(new_write_index != queue->read_index);
+
+   struct queue_entry *entry = queue->entries + queue->write_index;
+   entry->data = data;
+   entry->callback = callback;
+
+   queue->completion_target++;
+
+   _WriteBarrier();
+
+   queue->write_index = new_write_index;
+   ReleaseSemaphore(queue->semaphore, 1, 0);
+}
+
+function bool win32_dequeue_work(struct platform_work_queue *queue)
+{
+   // NOTE(law): Return whether this thread should be made to wait until more
+   // work becomes available.
+
+   u32 read_index = queue->read_index;
+   u32 new_read_index = (read_index + 1) % ARRAY_LENGTH(queue->entries);
+   if(read_index == queue->write_index)
+   {
+      return(true);
+   }
+
+   u32 index = InterlockedCompareExchange(&(LONG)queue->read_index, new_read_index, read_index);
+   if(index == read_index)
+   {
+      struct queue_entry entry = queue->entries[index];
+      entry.callback(queue, entry.data);
+
+      InterlockedIncrement(&(LONG)queue->completion_count);
+   }
+
+   return(false);
+}
+
+function PLATFORM_COMPLETE_QUEUE(platform_complete_queue)
+{
+   while(queue->completion_target > queue->completion_count)
+   {
+      win32_dequeue_work(queue);
+   }
+
+   queue->completion_target = 0;
+   queue->completion_count = 0;
+}
+
+function DWORD WINAPI win32_thread_procedure(void *parameter)
+{
+   struct platform_work_queue *queue = (struct platform_work_queue *)parameter;
+   platform_log("Worker thread launched.\n");
+
+   while(1)
+   {
+      if(win32_dequeue_work(queue))
+      {
+         WaitForSingleObjectEx(queue->semaphore, INFINITE, FALSE);
+      }
+   }
+
+   platform_log("Worker thread terminated.\n");
+
+   return(0);
+}
+
 
 function bool win32_is_fullscreen(HWND window)
 {
@@ -438,11 +510,40 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
    return(result);
 }
 
+function u32 win32_get_processor_count()
+{
+   SYSTEM_INFO info;
+   GetSystemInfo(&info);
+
+   u32 result = info.dwNumberOfProcessors;
+   return(result);
+}
+
 int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line, int show_command)
 {
    QueryPerformanceFrequency(&win32_global_counts_per_second);
    bool sleep_is_granular = (timeBeginPeriod(1) == TIMERR_NOERROR);
 
+   // NOTE(Law): Initialize worker threads.
+   u32 processor_count = win32_get_processor_count();
+
+   struct platform_work_queue queue = {0};
+   queue.semaphore = CreateSemaphoreExA(0, 0, processor_count, 0, 0, SEMAPHORE_ALL_ACCESS);
+
+   for(u32 index = 1; index < processor_count; ++index)
+   {
+      DWORD thread_id;
+      HANDLE thread_handle = CreateThread(0, 0, win32_thread_procedure, &queue, 0, &thread_id);
+      if(!thread_handle)
+      {
+         platform_log("ERROR: Windows failed to create thread %u.\n", index);
+         continue;
+      }
+
+      CloseHandle(thread_handle);
+   }
+
+   // NOTE(law): Create window.
    WNDCLASSEX window_class = {0};
    window_class.cbSize = sizeof(window_class);
    window_class.style = CS_HREDRAW|CS_VREDRAW;
@@ -543,9 +644,9 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
 
 #define USE_VARIABLE_TIMESTEP 1
 #if USE_VARIABLE_TIMESTEP
-      update(&gs, bitmap, &input, frame_seconds_elapsed);
+      update(&gs, bitmap, &input, &queue, frame_seconds_elapsed);
 #else
-      update(&gs, bitmap, &input, target_seconds_per_frame);
+      update(&gs, bitmap, &input, &queue, target_seconds_per_frame);
 #endif
 
       // NOTE(law): Blit bitmap to screen.
