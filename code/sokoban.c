@@ -19,6 +19,7 @@
 #define PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS 0.0666666f
 #define LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS 0.333333f
 
+#define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))
 #define MINIMUM(a, b) ((a) < (b) ? (a) : (b))
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
 #define LERP(a, t, b) (((1.0f - (t)) * (a)) + ((t) * (b)))
@@ -69,6 +70,30 @@ function void *allocate(struct memory_arena *arena, size_t size)
    arena->used += size;
 
    return(result);
+}
+
+function void zero_memory(void *memory, size_t size)
+{
+   // TODO(law): Speed this up!!
+
+   u8 *bytes = (u8 *)memory;
+   while(size--)
+   {
+      *bytes++ = 0;
+   }
+}
+
+function void copy_memory(void *destination, void *source, size_t size)
+{
+   // TODO(law): Speed this up!!
+
+   u8 *destination_bytes = (u8 *)destination;
+   u8 *source_bytes = (u8 *)source;
+
+   while(size--)
+   {
+      *destination_bytes++ = *source_bytes++;
+   }
 }
 
 // NOTE(law): This pseudorandom number generation is based on the version
@@ -198,6 +223,8 @@ struct game_level
    struct tile_map_state map;
    struct tile_attributes attributes[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
 
+   u32 move_count;
+
    u32 undo_index;
    u32 undo_count;
    struct tile_map_state undos[256];
@@ -218,8 +245,8 @@ struct movement_result
    u32 final_box_tilex;
    u32 final_box_tiley;
 
-   bool is_player_moving;
-   bool is_box_moving;
+   u32 player_tile_delta;
+   u32 box_tile_delta;
 };
 
 struct game_state
@@ -392,16 +419,10 @@ function enum wall_type get_wall_type(struct tile_map_state *map, u32 x, u32 y)
 
 function void load_level(struct game_state *gs, struct game_level *level, char *file_path)
 {
-   level->file_path = file_path;
-
    // NOTE(law): Clear level contents.
-   for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
-   {
-      for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
-      {
-         level->map.tiles[y][x] = 0;
-      }
-   }
+   zero_memory(level, sizeof(*level));
+
+   level->file_path = file_path;
 
    struct platform_file level_file = platform_load_file(file_path);
    {
@@ -496,30 +517,6 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
    }
 }
 
-function void zero_memory(void *memory, size_t size)
-{
-   // TODO(law): Speed this up!!
-
-   u8 *bytes = (u8 *)memory;
-   while(size--)
-   {
-      *bytes++ = 0;
-   }
-}
-
-function void copy_memory(void *destination, void *source, size_t size)
-{
-   // TODO(law): Speed this up!!
-
-   u8 *destination_bytes = (u8 *)destination;
-   u8 *source_bytes = (u8 *)source;
-
-   while(size--)
-   {
-      *destination_bytes++ = *source_bytes++;
-   }
-}
-
 function void reload_level(struct game_state *gs, struct game_level *level)
 {
    // TODO(law): Identify other cases where we care about resetting movement and
@@ -536,7 +533,6 @@ function void push_undo(struct game_level *level)
    level->undo_count = MINIMUM(level->undo_count + 1, ARRAY_LENGTH(level->undos));
 
    struct tile_map_state *undo = level->undos + level->undo_index;
-
    undo->player_tilex = level->map.player_tilex;
    undo->player_tiley = level->map.player_tiley;
 
@@ -554,7 +550,6 @@ function void pop_undo(struct game_level *level)
    if(level->undo_count > 0)
    {
       struct tile_map_state *undo = level->undos + level->undo_index;
-
       level->map.player_tilex = undo->player_tilex;
       level->map.player_tiley = undo->player_tiley;
 
@@ -568,6 +563,7 @@ function void pop_undo(struct game_level *level)
 
       level->undo_index = (level->undo_index > 0) ? (level->undo_index - 1) : ARRAY_LENGTH(level->undos) - 1;
       level->undo_count--;
+      level->move_count--;
    }
 }
 
@@ -714,18 +710,23 @@ function struct movement_result move_player(struct game_level *level, enum playe
       break;
    }
 
-   if(result.final_player_tilex != result.initial_player_tilex ||
-      result.final_player_tiley != result.initial_player_tiley)
-   {
-      result.is_player_moving = true;
-   }
+   s32 player_deltax = result.final_player_tilex - result.initial_player_tilex;
+   s32 player_deltay = result.final_player_tiley - result.initial_player_tiley;
 
-   if(result.final_box_tilex != result.initial_box_tilex ||
-      result.final_box_tiley != result.initial_box_tiley)
-   {
-      result.is_box_moving = true;
-   }
+   if(player_deltax < 0) player_deltax *= -1;
+   if(player_deltay < 0) player_deltay *= -1;
 
+   result.player_tile_delta = player_deltax + player_deltay;
+
+   level->move_count += result.player_tile_delta;
+
+   s32 box_deltax = result.final_box_tilex - result.initial_box_tilex;
+   s32 box_deltay = result.final_box_tiley - result.initial_box_tiley;
+
+   if(box_deltax < 0) box_deltax *= -1;
+   if(box_deltay < 0) box_deltay *= -1;
+
+   result.box_tile_delta = box_deltax + box_deltay;
 
    return(result);
 }
@@ -735,6 +736,37 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
    for(u32 y = 0; y < destination.height; ++y)
    {
       for(u32 x = 0; x < destination.width; ++x)
+      {
+         u32 destination_index = (y * destination.width) + x;
+         destination.memory[destination_index] = color;
+      }
+   }
+}
+
+typedef struct
+{
+   float x;
+   float y;
+} v2;
+
+function v2 add2(v2 a, v2 b)
+{
+   a.x += b.x;
+   a.y += b.y;
+
+   return(a);
+}
+
+function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 max, u32 color)
+{
+   u32 minx = MAXIMUM(0, (s32)min.x);
+   u32 miny = MAXIMUM(0, (s32)min.y);
+   u32 maxx = MINIMUM((u32)max.x, destination.width - 1);
+   u32 maxy = MINIMUM((u32)max.y, destination.height - 1);
+
+   for(u32 y = miny; y <= maxy; ++y)
+   {
+      for(u32 x = minx; x <= maxx; ++x)
       {
          u32 destination_index = (y * destination.width) + x;
          destination.memory[destination_index] = color;
@@ -1013,7 +1045,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output,
          gs->movement = move_player(level, PLAYER_DIRECTION_RIGHT, movement);
       }
 
-      if(gs->movement.is_player_moving)
+      if(gs->movement.player_tile_delta > 0)
       {
          gs->player_animation_seconds_remaining = PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
       }
@@ -1040,7 +1072,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output,
    immediate_clear(render_output, 0xFFFF00FF);
 
    // NOTE(law): First render pass for non-animating objects.
-   bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.is_box_moving);
+   bool is_box_animating = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.box_tile_delta > 0);
 
    for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
    {
@@ -1164,6 +1196,27 @@ function void update(struct game_state *gs, struct render_bitmap render_output,
 
    immediate_tile_bitmap(render_output, gs->player, playerx, playery);
 
+   // NOTE(law): Render UI.
+   float score_offset = 0.5f * TILE_DIMENSION_PIXELS;
+   v2 score_position = {score_offset, score_offset};
+   v2 score_dim = {0.25f * TILE_DIMENSION_PIXELS, 0.25f * TILE_DIMENSION_PIXELS};
+
+   for(u32 index = 0; index < level->move_count; ++index)
+   {
+      v2 min = score_position;
+      v2 max = add2(min, score_dim);
+
+      immediate_rectangle(render_output, min, max, 0xFF00FF00);
+
+      score_position.x += score_offset;
+      if(((index + 1) % 8) == 0)
+      {
+         score_position.x = score_offset;
+         score_position.y += score_offset;
+      }
+   }
+
+   // NOTE(law): Render level transition overlay.
    if(gs->transition_animation_seconds_remaining > 0)
    {
       float alpha = gs->transition_animation_seconds_remaining / LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS;
