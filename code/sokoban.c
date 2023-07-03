@@ -3,6 +3,7 @@
 /* /////////////////////////////////////////////////////////////////////////// */
 
 #include <assert.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -84,8 +85,11 @@ function PLATFORM_COMPLETE_QUEUE(platform_complete_queue);
 
 struct render_bitmap
 {
-   u32 width;
-   u32 height;
+   s32 width;
+   s32 height;
+
+   s32 offsetx;
+   s32 offsety;
 
    u32 *memory;
 };
@@ -97,7 +101,8 @@ struct memory_arena
    size_t used;
 };
 
-#define ALLOCATE(arena, type) (allocate((arena), sizeof(type)))
+#define ALLOCATE_SIZE(arena, size) (allocate((arena), (size)))
+#define ALLOCATE_TYPE(arena, type) (allocate((arena), sizeof(type)))
 
 function void *allocate(struct memory_arena *arena, size_t size)
 {
@@ -182,6 +187,16 @@ function u32 random_range(struct random_entropy *entropy, u32 minimum, u32 maxim
    return(result);
 }
 
+struct font_glyphs
+{
+   float ascent;
+   float descent;
+   float line_gap;
+
+   struct render_bitmap glyphs[128];
+   float *pair_distances;
+};
+
 struct game_input_button
 {
    bool is_pressed;
@@ -244,6 +259,7 @@ struct tile_map_state
 {
    u32 player_tilex;
    u32 player_tiley;
+   u32 push_count;
 
    enum tile_type tiles[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
 };
@@ -261,6 +277,7 @@ struct game_level
    struct tile_attributes attributes[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
 
    u32 move_count;
+   u32 push_count;
 
    u32 undo_index;
    u32 undo_count;
@@ -308,6 +325,8 @@ struct game_state
 
    float transition_animation_seconds_remaining;
    struct render_bitmap completion_snapshot;
+
+   struct font_glyphs font;
 
    bool is_initialized;
 };
@@ -359,9 +378,9 @@ function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file
    u32 *source_memory = (u32 *)(file.memory + header->bitmap_offset);
    u32 *row = source_memory + (result.width * (result.height - 1));
 
-   for(u32 y = 0; y < result.height; ++y)
+   for(s32 y = 0; y < result.height; ++y)
    {
-      for(u32 x = 0; x < result.width; ++x)
+      for(s32 x = 0; x < result.width; ++x)
       {
          result.memory[(y * result.width) + x] = *(row + x);
       }
@@ -372,6 +391,42 @@ function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file
    platform_free_file(&file);
 
    return(result);
+}
+
+function void load_font(struct font_glyphs *font, struct memory_arena *arena, char *file_path)
+{
+   // TODO(law): Better asset packing/unpacking.
+
+   // NOTE(law): There's nothing fancy going on with this file format. It's
+   // literally just the font_glyphs struct, followed by the pair_distances
+   // table, and then glyph bitmap memory buffers.
+
+   struct platform_file file = platform_load_file(file_path);
+   assert(file.memory);
+
+   copy_memory(font, file.memory, sizeof(struct font_glyphs));
+   file.memory += sizeof(struct font_glyphs);
+
+   u32 codepoint_count = ARRAY_LENGTH(font->glyphs);
+
+   size_t pair_distances_size = codepoint_count * codepoint_count * sizeof(float);
+   font->pair_distances = ALLOCATE_SIZE(arena, pair_distances_size);
+
+   copy_memory(font->pair_distances, file.memory, pair_distances_size);
+   file.memory += pair_distances_size;
+
+   for(u32 index = 0; index < codepoint_count; ++index)
+   {
+      struct render_bitmap *glyph = font->glyphs + index;
+
+      size_t size = glyph->width * glyph->height * sizeof(u32);
+      glyph->memory = ALLOCATE_SIZE(arena, size);
+
+      copy_memory(glyph->memory, file.memory, size);
+      file.memory += size;
+   }
+
+   platform_free_file(&file);
 }
 
 function bool is_inconsequential_whitespace(char c)
@@ -572,6 +627,7 @@ function void push_undo(struct game_level *level)
    struct tile_map_state *undo = level->undos + level->undo_index;
    undo->player_tilex = level->map.player_tilex;
    undo->player_tiley = level->map.player_tiley;
+   undo->push_count = level->push_count;
 
    for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
    {
@@ -601,6 +657,7 @@ function void pop_undo(struct game_level *level)
       level->undo_index = (level->undo_index > 0) ? (level->undo_index - 1) : ARRAY_LENGTH(level->undos) - 1;
       level->undo_count--;
       level->move_count--;
+      level->push_count = undo->push_count;
    }
 }
 
@@ -719,6 +776,10 @@ function struct movement_result move_player(struct game_level *level, enum playe
                {
                   if(movement != PLAYER_MOVEMENT_DASH)
                   {
+                     if((bx != px) || (by != py))
+                     {
+                        level->push_count++;
+                     }
                      push_undo(level);
 
                      level->map.player_tilex = px;
@@ -754,7 +815,6 @@ function struct movement_result move_player(struct game_level *level, enum playe
    if(player_deltay < 0) player_deltay *= -1;
 
    result.player_tile_delta = player_deltax + player_deltay;
-
    level->move_count += result.player_tile_delta;
 
    s32 box_deltax = result.final_box_tilex - result.initial_box_tilex;
@@ -770,9 +830,9 @@ function struct movement_result move_player(struct game_level *level, enum playe
 
 function void immediate_clear(struct render_bitmap destination, u32 color)
 {
-   for(u32 y = 0; y < destination.height; ++y)
+   for(s32 y = 0; y < destination.height; ++y)
    {
-      for(u32 x = 0; x < destination.width; ++x)
+      for(s32 x = 0; x < destination.width; ++x)
       {
          u32 destination_index = (y * destination.width) + x;
          destination.memory[destination_index] = color;
@@ -796,14 +856,14 @@ function v2 add2(v2 a, v2 b)
 
 function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 max, u32 color)
 {
-   u32 minx = MAXIMUM(0, (s32)min.x);
-   u32 miny = MAXIMUM(0, (s32)min.y);
-   u32 maxx = MINIMUM((u32)max.x, destination.width - 1);
-   u32 maxy = MINIMUM((u32)max.y, destination.height - 1);
+   s32 minx = MAXIMUM(0, (s32)min.x);
+   s32 miny = MAXIMUM(0, (s32)min.y);
+   s32 maxx = MINIMUM((s32)max.x, destination.width - 1);
+   s32 maxy = MINIMUM((s32)max.y, destination.height - 1);
 
-   for(u32 y = miny; y <= maxy; ++y)
+   for(s32 y = miny; y <= maxy; ++y)
    {
-      for(u32 x = minx; x <= maxx; ++x)
+      for(s32 x = minx; x <= maxx; ++x)
       {
          u32 destination_index = (y * destination.width) + x;
          destination.memory[destination_index] = color;
@@ -816,9 +876,9 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
    assert(destination.width == source.width);
    assert(destination.height == source.height);
 
-   for(u32 y = 0; y < destination.height; ++y)
+   for(s32 y = 0; y < destination.height; ++y)
    {
-      for(u32 x = 0; x < destination.width; ++x)
+      for(s32 x = 0; x < destination.width; ++x)
       {
          u32 source_color = source.memory[(y * source.width) + x];
          float sr = (float)((source_color >> 16) & 0xFF);
@@ -866,11 +926,9 @@ function s32 ceiling_s32(float value)
    return(result);
 }
 
-function void immediate_tile_bitmap(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
+function void immediate_bitmap(struct render_bitmap destination, struct render_bitmap source,
+                               float posx, float posy, s32 render_width, s32 render_height)
 {
-   s32 render_width = TILE_DIMENSION_PIXELS;
-   s32 render_height = TILE_DIMENSION_PIXELS;
-
    // NOTE(law): Assuming tile size of 32x32: when aligned to pixel boundaries,
    // x and y should range from 0 to 31 inclusive. This results in writing 32
    // pixels per row. When unaligned (say 0.5 to 31.5), the range becomes 0 to
@@ -909,8 +967,8 @@ function void immediate_tile_bitmap(struct render_bitmap destination, struct ren
          // are 18x18, with 16x16 pixels of content surrounded by a 1px
          // transparent margin. Therefore, u and v of 0.0f should map to 1 and
          // 1.0f should map to 16.
-         u32 sourcex = 1 + (u32)((u * (source.width - 3)) + 0.5f);
-         u32 sourcey = 1 + (u32)((v * (source.height - 3)) + 0.5f);
+         s32 sourcex = 1 + (u32)((u * (source.width - 3)) + 0.5f);
+         s32 sourcey = 1 + (u32)((v * (source.height - 3)) + 0.5f);
 
          assert(sourcex >= 0 && sourcex < source.width);
          assert(sourcey >= 0 && sourcey < source.height);
@@ -942,6 +1000,52 @@ function void immediate_tile_bitmap(struct render_bitmap destination, struct ren
                       ((u32)(a + 0.5f) << 24));
 
          *destination_pixel = color;
+      }
+   }
+}
+
+function void immediate_tile_bitmap(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
+{
+   s32 render_width = TILE_DIMENSION_PIXELS;
+   s32 render_height = TILE_DIMENSION_PIXELS;
+   immediate_bitmap(destination, source, posx, posy, render_width, render_height);
+}
+
+function void immediate_text(struct render_bitmap destination, struct font_glyphs *font,
+                             float posx, float posy, char *format, ...)
+{
+   char text_buffer[256];
+
+   va_list arguments;
+   va_start(arguments, format);
+   {
+      vsnprintf(text_buffer, sizeof(text_buffer), format, arguments);
+   }
+   va_end(arguments);
+
+   u32 codepoint_count = ARRAY_LENGTH(font->glyphs);
+   posy += (float)font->ascent;
+
+   char *text = text_buffer;
+   while(*text)
+   {
+      char codepoint = *text++;
+
+      struct render_bitmap source = font->glyphs[codepoint];
+      float minx = posx + source.offsetx;
+      float miny = posy + source.offsety;
+      s32 render_width = source.width - 2;
+      s32 render_height = source.height - 2;
+
+      immediate_bitmap(destination, source, minx, miny, render_width, render_height);
+
+      char next_codepoint = *text;
+      if(next_codepoint)
+      {
+         int pair_index = (codepoint * codepoint_count) + next_codepoint;
+         float pair_distance = font->pair_distances[pair_index];
+
+         posx += pair_distance;
       }
    }
 }
@@ -1103,8 +1207,10 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
 
       for(u32 index = 0; index < ARRAY_LENGTH(gs->levels); ++index)
       {
-         gs->levels[index] = ALLOCATE(&gs->arena, struct game_level);
+         gs->levels[index] = ALLOCATE_TYPE(&gs->arena, struct game_level);
       }
+
+      load_font(&gs->font, &gs->arena, "../data/atari.font");
 
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/simple.sok");
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
@@ -1133,7 +1239,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
 
       gs->completion_snapshot.width  = render_output.width;
       gs->completion_snapshot.height = render_output.height;
-      gs->completion_snapshot.memory = ALLOCATE(&gs->arena, bitmap_size);
+      gs->completion_snapshot.memory = ALLOCATE_SIZE(&gs->arena, bitmap_size);
 
       gs->is_initialized = true;
    }
@@ -1307,24 +1413,15 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    immediate_tile_bitmap(render_output, gs->player, playerx, playery);
 
    // NOTE(law): Render UI.
-   float score_offset = 0.5f * TILE_DIMENSION_PIXELS;
-   v2 score_position = {score_offset, score_offset};
-   v2 score_dim = {0.25f * TILE_DIMENSION_PIXELS, 0.25f * TILE_DIMENSION_PIXELS};
+   float text_height = gs->font.ascent - gs->font.descent + gs->font.line_gap;
+   float textx = 0.25f * TILE_DIMENSION_PIXELS;
+   float texty = 0.5f * text_height;
 
-   for(u32 index = 0; index < level->move_count; ++index)
-   {
-      v2 min = score_position;
-      v2 max = add2(min, score_dim);
+   immediate_text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);
+   texty += text_height;
 
-      immediate_rectangle(render_output, min, max, 0xFF00FF00);
-
-      score_position.x += score_offset;
-      if(((index + 1) % 8) == 0)
-      {
-         score_position.x = score_offset;
-         score_position.y += score_offset;
-      }
-   }
+   immediate_text(render_output, &gs->font, textx, texty, "Push Count: %u", level->push_count);
+   texty += text_height;
 
    // NOTE(law): Render level transition overlay.
    if(gs->transition_animation_seconds_remaining > 0)
