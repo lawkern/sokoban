@@ -10,6 +10,7 @@ typedef HANDLE platform_semaphore;
 
 #define WIN32_LOG_MAX_LENGTH 1024
 #define WIN32_DEFAULT_DPI 96
+#define WIN32_WORKER_THREAD_COUNT 8
 
 #define WIN32_SECONDS_ELAPSED(start, end) ((float)((end).QuadPart - (start).QuadPart) / \
                                            (float)win32_global_counts_per_second.QuadPart)
@@ -44,7 +45,7 @@ function PLATFORM_FREE_FILE(platform_free_file)
    {
       if(!VirtualFree(file->memory, 0, MEM_RELEASE))
       {
-         platform_log("Failed to free virtual memory.\n");
+         platform_log("ERROR: Failed to free virtual memory.\n");
       }
    }
 
@@ -487,6 +488,15 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
             input->previous.changed_state = key_changed_state;
          } break;
 
+         case 'F':
+         case VK_F11:
+         {
+            if(key_is_pressed && key_changed_state)
+            {
+               win32_toggle_fullscreen(message.hwnd);
+            }
+         } break;
+
          case VK_RETURN:
          {
             if(is_alt_pressed && key_is_pressed && key_changed_state)
@@ -526,11 +536,12 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
 
    // NOTE(Law): Initialize worker threads.
    u32 processor_count = win32_get_processor_count();
+   u32 worker_thread_count = MINIMUM(processor_count, WIN32_WORKER_THREAD_COUNT);
 
    struct platform_work_queue queue = {0};
-   queue.semaphore = CreateSemaphoreExA(0, 0, processor_count, 0, 0, SEMAPHORE_ALL_ACCESS);
+   queue.semaphore = CreateSemaphoreExA(0, 0, worker_thread_count, 0, 0, SEMAPHORE_ALL_ACCESS);
 
-   for(u32 index = 1; index < processor_count; ++index)
+   for(u32 index = 1; index < worker_thread_count; ++index)
    {
       DWORD thread_id;
       HANDLE thread_handle = CreateThread(0, 0, win32_thread_procedure, &queue, 0, &thread_id);
