@@ -616,16 +616,6 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
    }
 }
 
-function void reload_level(struct game_state *gs, struct game_level *level)
-{
-   // TODO(law): Identify other cases where we care about resetting movement and
-   // animation state.
-   gs->player_animation_seconds_remaining = 0;
-   zero_memory(&gs->movement, sizeof(gs->movement));
-
-   load_level(gs, level, level->file_path);
-}
-
 function void push_undo(struct game_level *level)
 {
    level->undo_index = (level->undo_index + 1) % ARRAY_LENGTH(level->undos);
@@ -1077,29 +1067,44 @@ function bool is_level_complete(struct game_level *level)
    return(true);
 }
 
-function struct game_level *change_level(struct game_state *gs, struct render_bitmap snapshot, u32 index)
+function struct game_level *set_level(struct game_state *gs, struct render_bitmap snapshot, u32 index)
 {
    struct game_level *level = gs->levels[gs->level_index];
 
+   // NOTE(law): Save the current backbuffer so it can be faded out.
    size_t snapshot_size = snapshot.width * snapshot.height * sizeof(u32);
    copy_memory(gs->completion_snapshot.memory, snapshot.memory, snapshot_size);
 
    gs->transition_animation_seconds_remaining = LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS;
 
-   reload_level(gs, level);
+   // NOTE(law): Clear any state that is invalidated by a level transition.
+   gs->player_animation_seconds_remaining = 0;
+   zero_memory(&gs->movement, sizeof(gs->movement));
+
+   // TODO(law): Identify other cases where we care about resetting movement and
+   // animation state.
+
+   // NOTE(law): Load the specified level.
+   load_level(gs, level, level->file_path);
+
    return(level);
 }
 
 function struct game_level *next_level(struct game_state *gs, struct render_bitmap snapshot)
 {
    gs->level_index = (gs->level_index + 1) % gs->level_count;
-   return change_level(gs, snapshot, gs->level_index);
+   return set_level(gs, snapshot, gs->level_index);
 }
 
 function struct game_level *previous_level(struct game_state *gs, struct render_bitmap snapshot)
 {
    gs->level_index = (gs->level_index > 0) ? gs->level_index - 1 : gs->level_count - 1;
-   return change_level(gs, snapshot, gs->level_index);
+   return set_level(gs, snapshot, gs->level_index);
+}
+
+function void reload_level(struct game_state *gs, struct render_bitmap snapshot)
+{
+   set_level(gs, snapshot, gs->level_index);
 }
 
 function bool is_player_animating(struct game_state *gs)
@@ -1316,7 +1321,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    }
    else if(was_pressed(input->reload))
    {
-      reload_level(gs, gs->levels[gs->level_index]);
+      reload_level(gs, render_output);
    }
    else if(was_pressed(input->next))
    {
