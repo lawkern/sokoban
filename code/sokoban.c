@@ -12,7 +12,10 @@
 
 #define SCREEN_TILE_COUNT_X 30
 #define SCREEN_TILE_COUNT_Y 20
-#define TILE_DIMENSION_PIXELS 32
+
+#define SOURCE_BITMAP_DIMENSION_PIXELS 16
+#define TILE_BITMAP_SCALE 2
+#define TILE_DIMENSION_PIXELS (SOURCE_BITMAP_DIMENSION_PIXELS * TILE_BITMAP_SCALE)
 
 #define RENDER_TILE_COUNT_X 6
 #define RENDER_TILE_COUNT_Y 4
@@ -396,6 +399,9 @@ function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file
 function void load_font(struct font_glyphs *font, struct memory_arena *arena, char *file_path)
 {
    // TODO(law): Better asset packing/unpacking.
+
+   // TODO(law): Determine the best way to generate pixel-perfect bitmap fonts,
+   // at least at 1x and 2x scale.
 
    // NOTE(law): There's nothing fancy going on with this file format. It's
    // literally just the font_glyphs struct, followed by the pair_distances
@@ -1025,26 +1031,29 @@ function void immediate_text(struct render_bitmap destination, struct font_glyph
    va_end(arguments);
 
    u32 codepoint_count = ARRAY_LENGTH(font->glyphs);
-   posy += (float)font->ascent;
+   posy += (font->ascent * TILE_BITMAP_SCALE);
 
    char *text = text_buffer;
    while(*text)
    {
       char codepoint = *text++;
 
+      // TODO(law): Determine the best way to render pixel-perfect bitmap fonts,
+      // at least at 1x and 2x scale.
+
       struct render_bitmap source = font->glyphs[codepoint];
-      float minx = posx + source.offsetx;
-      float miny = posy + source.offsety;
-      s32 render_width = source.width - 2;
-      s32 render_height = source.height - 2;
+      float minx = posx + (source.offsetx * TILE_BITMAP_SCALE);
+      float miny = posy + (source.offsety * TILE_BITMAP_SCALE);
+      s32 render_width  = (source.width - 2) * TILE_BITMAP_SCALE;
+      s32 render_height = (source.height - 2) * TILE_BITMAP_SCALE;
 
       immediate_bitmap(destination, source, minx, miny, render_width, render_height);
 
       char next_codepoint = *text;
       if(next_codepoint)
       {
-         int pair_index = (codepoint * codepoint_count) + next_codepoint;
-         float pair_distance = font->pair_distances[pair_index];
+         u32 pair_index = (codepoint * codepoint_count) + next_codepoint;
+         float pair_distance = font->pair_distances[pair_index] * TILE_BITMAP_SCALE;
 
          posx += pair_distance;
       }
@@ -1414,8 +1423,8 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    immediate_tile_bitmap(render_output, gs->player, playerx, playery);
 
    // NOTE(law): Render UI.
-   float text_height = gs->font.ascent - gs->font.descent + gs->font.line_gap;
-   float textx = 0.25f * TILE_DIMENSION_PIXELS;
+   float text_height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE;
+   float textx = 0.5f * TILE_DIMENSION_PIXELS;
    float texty = 0.5f * text_height;
 
    immediate_text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);
