@@ -25,9 +25,6 @@
 #define RESOLUTION_BASE_WIDTH (SCREEN_TILE_COUNT_X * TILE_DIMENSION_PIXELS)
 #define RESOLUTION_BASE_HEIGHT (SCREEN_TILE_COUNT_Y * TILE_DIMENSION_PIXELS)
 
-#define PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS 0.0666666f
-#define LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS 0.333333f
-
 #define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))
 #define MINIMUM(a, b) ((a) < (b) ? (a) : (b))
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
@@ -317,6 +314,12 @@ enum game_menu_state
    MENU_STATE_PAUSE,
 };
 
+struct animation_timer
+{
+   float seconds_remaining;
+   float seconds_duration;
+};
+
 struct game_state
 {
    struct memory_arena arena;
@@ -336,10 +339,17 @@ struct game_state
    struct render_bitmap wall[5];
    struct render_bitmap goal;
 
-   float player_animation_seconds_remaining;
-   struct movement_result movement;
+   union
+   {
+      struct
+      {
+         struct animation_timer player_movement;
+         struct animation_timer level_transition;
+      };
+      struct animation_timer animations[2];
+   };
 
-   float transition_animation_seconds_remaining;
+   struct movement_result movement;
    struct render_bitmap snapshot;
 
    struct font_glyphs font;
@@ -1062,23 +1072,6 @@ function void immediate_text(struct render_bitmap destination, struct font_glyph
    }
 }
 
-function bool is_level_complete(struct game_level *level)
-{
-   for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
-   {
-      for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
-      {
-         enum tile_type type = level->map.tiles[tiley][tilex];
-         if(type == TILE_TYPE_PLAYER_ON_GOAL || type == TILE_TYPE_GOAL)
-         {
-            return(false);
-         }
-      }
-   }
-
-   return(true);
-}
-
 function void snapshot_screen(struct game_state *gs, struct render_bitmap snapshot)
 {
    assert(snapshot.width == gs->snapshot.width);
@@ -1088,19 +1081,98 @@ function void snapshot_screen(struct game_state *gs, struct render_bitmap snapsh
    copy_memory(gs->snapshot.memory, snapshot.memory, snapshot_size);
 }
 
+function void begin_animation(struct animation_timer *animation)
+{
+   animation->seconds_remaining = animation->seconds_duration;
+}
+
+function void end_animation(struct animation_timer *animation)
+{
+   animation->seconds_remaining = 0;
+}
+
+function bool is_animating(struct animation_timer *animation)
+{
+   bool result = (animation->seconds_remaining > 0.0f);
+   return(result);
+}
+
+function bool is_something_animating(struct game_state *gs)
+{
+   bool result = false;
+
+   for(u32 index = 0; index < ARRAY_LENGTH(gs->animations); ++index)
+   {
+      struct animation_timer *animation = gs->animations + index;
+      if(is_animating(animation))
+      {
+         result = true;
+         break;
+      }
+   }
+
+   return(result);
+}
+
+function void decrement_animation_timers(struct game_state *gs, float seconds)
+{
+   for(u32 index = 0; index < ARRAY_LENGTH(gs->animations); ++index)
+   {
+      struct animation_timer *animation = gs->animations + index;
+      animation->seconds_remaining -= seconds;
+
+      if(!is_animating(animation))
+      {
+         end_animation(animation);
+      }
+   }
+}
+
+function bool is_player_moving(struct game_state *gs)
+{
+   bool result = (is_animating(&gs->player_movement) && (gs->movement.player_tile_delta > 0));
+   return(result);
+}
+
+function bool is_any_box_moving(struct game_state *gs)
+{
+   // NOTE(law): Moving is distinct from animating - a player may have initiated
+   // a charge that will move a box, but not yet made contact (i.e. the player
+   // has started animating but not the box).
+   bool result = (is_animating(&gs->player_movement) && gs->movement.box_tile_delta > 0);
+   return(result);
+}
+
+function bool is_this_box_moving(struct game_state *gs, u32 tilex, u32 tiley)
+{
+   // NOTE(law): Moving is distinct from animating - a player may have initiated
+   // a charge that will move a box, but not yet made contact (i.e. the player
+   // has started animating but not the box).
+   bool result = is_any_box_moving(gs);
+   if(result)
+   {
+      result = (tilex == gs->movement.final_box_tilex && tiley == gs->movement.final_box_tiley);
+   }
+   return(result);
+}
+
+function void begin_level_transition(struct game_state *gs, struct render_bitmap snapshot)
+{
+   // NOTE(law): Save the current backbuffer so it can be faded out.
+   snapshot_screen(gs, snapshot);
+   begin_animation(&gs->level_transition);
+}
+
 function struct game_level *set_level(struct game_state *gs, struct render_bitmap snapshot, u32 index)
 {
    // NOTE(law): Update the current level specified in gs.
    gs->level_index = index;
    struct game_level *level = gs->levels[gs->level_index];
 
-   // NOTE(law): Save the current backbuffer so it can be faded out.
-   snapshot_screen(gs, snapshot);
-
-   gs->transition_animation_seconds_remaining = LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS;
+   begin_level_transition(gs, snapshot);
 
    // NOTE(law): Clear any state that is invalidated by a level transition.
-   gs->player_animation_seconds_remaining = 0;
+   end_animation(&gs->player_movement);
    zero_memory(&gs->movement, sizeof(gs->movement));
 
    // TODO(law): Identify other cases where we care about resetting movement and
@@ -1129,32 +1201,27 @@ function void reload_level(struct game_state *gs, struct render_bitmap snapshot)
    set_level(gs, snapshot, gs->level_index);
 }
 
-function bool is_player_animating(struct game_state *gs)
+function bool is_level_complete(struct game_state *gs)
 {
-   bool result = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.player_tile_delta > 0);
-   return(result);
-}
-
-function bool is_any_box_animating(struct game_state *gs)
-{
-   bool result = (gs->player_animation_seconds_remaining > 0.0f && gs->movement.box_tile_delta > 0);
-   return(result);
-}
-
-function bool is_this_box_animating(struct game_state *gs, u32 tilex, u32 tiley)
-{
-   bool result = is_any_box_animating(gs);
-   if(result)
+   if(is_something_animating(gs))
    {
-      result = (tilex == gs->movement.final_box_tilex && tiley == gs->movement.final_box_tiley);
+      return(false);
    }
-   return(result);
-}
 
-function bool is_level_transition_animating(struct game_state *gs)
-{
-   bool result = (gs->transition_animation_seconds_remaining > 0.0f);
-   return(result);
+   struct game_level *level = gs->levels[gs->level_index];
+   for(u32 tiley = 0; tiley < SCREEN_TILE_COUNT_Y; ++tiley)
+   {
+      for(u32 tilex = 0; tilex < SCREEN_TILE_COUNT_X; ++tilex)
+      {
+         enum tile_type type = level->map.tiles[tiley][tilex];
+         if(type == TILE_TYPE_PLAYER_ON_GOAL || type == TILE_TYPE_GOAL)
+         {
+            return(false);
+         }
+      }
+   }
+
+   return(true);
 }
 
 struct render_tile_data
@@ -1194,7 +1261,7 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
          {
             case TILE_TYPE_BOX:
             {
-               if(!is_this_box_animating(gs, tilex, tiley))
+               if(!is_this_box_moving(gs, tilex, tiley))
                {
                   immediate_tile_bitmap(render_output, gs->box, x, y);
                }
@@ -1202,7 +1269,7 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
 
             case TILE_TYPE_BOX_ON_GOAL:
             {
-               if(!is_this_box_animating(gs, tilex, tiley))
+               if(!is_this_box_moving(gs, tilex, tiley))
                {
                   immediate_tile_bitmap(render_output, gs->box_on_goal, x, y);
                }
@@ -1282,12 +1349,13 @@ function bool title_menu(struct game_state *gs, struct render_bitmap render_outp
       float posy = (float)render_output.height - TILE_DIMENSION_PIXELS;
       float height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE * 1.35f;
 
-      immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <Enter> to start.");
-      immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "SOKOBAN 2023");
+      immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <Enter> to start");
+      immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "SOKOBAN 2023 (WORKING TITLE)");
 
       if(was_pressed(input->confirm))
       {
          gs->menu_state = MENU_STATE_NONE;
+         begin_level_transition(gs, render_output);
       }
    }
 
@@ -1300,15 +1368,15 @@ function bool pause_menu(struct game_state *gs, struct render_bitmap render_outp
    bool result = (gs->menu_state == MENU_STATE_PAUSE);
    if(result)
    {
-      immediate_clear(render_output, 0xFF330033);
-      immediate_screen_bitmap(render_output, gs->snapshot, 0.25f);
+      immediate_clear(render_output, 0xFF222034);
+      immediate_screen_bitmap(render_output, gs->snapshot, 0.5f);
 
       float posx = TILE_DIMENSION_PIXELS * 0.5f;
       float posy = (float)render_output.height - TILE_DIMENSION_PIXELS;
       float height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE * 1.35f;
 
-      immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <q> to return to title.");
-      immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "Press <p> to resume.");
+      immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <q> to return to title");
+      immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "Press <p> to resume");
 
       if(was_pressed(input->pause))
       {
@@ -1358,6 +1426,9 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
       gs->box_on_goal    = load_bitmap(&gs->arena, "../data/box_on_goal.bmp");
       gs->goal           = load_bitmap(&gs->arena, "../data/goal.bmp");
 
+      gs->player_movement.seconds_duration = 0.0666666f;
+      gs->level_transition.seconds_duration = 0.333333f;
+
       size_t bitmap_size = render_output.width * render_output.height * sizeof(u32);
 
       gs->snapshot.width  = render_output.width;
@@ -1379,31 +1450,18 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    }
 
    struct game_level *level = gs->levels[gs->level_index];
-   if(is_player_animating(gs))
+   if(is_something_animating(gs))
    {
-      gs->player_animation_seconds_remaining -= frame_seconds_elapsed;
-   }
-   else if(is_level_transition_animating(gs))
-   {
-      gs->transition_animation_seconds_remaining -= frame_seconds_elapsed;
+      decrement_animation_timers(gs, frame_seconds_elapsed);
    }
    else
    {
       // NOTE(law): Process player input.
-      gs->player_animation_seconds_remaining = 0.0f;
-      gs->transition_animation_seconds_remaining = 0.0f;
-
       if(was_pressed(input->pause))
       {
          gs->menu_state = MENU_STATE_PAUSE;
          snapshot_screen(gs, render_output);
-
          return;
-      }
-
-      if(is_level_complete(level))
-      {
-         level = next_level(gs, render_output);
       }
 
       gs->movement = (struct movement_result){0};
@@ -1437,7 +1495,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
 
       if(gs->movement.player_tile_delta > 0)
       {
-         gs->player_animation_seconds_remaining = PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
+         begin_animation(&gs->player_movement);
       }
    }
 
@@ -1468,7 +1526,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    float playerx = (float)level->map.player_tilex * TILE_DIMENSION_PIXELS;
    float playery = (float)level->map.player_tiley * TILE_DIMENSION_PIXELS;
 
-   if(is_player_animating(gs))
+   if(is_animating(&gs->player_movement))
    {
       u32 initial_playerx = gs->movement.initial_player_tilex * TILE_DIMENSION_PIXELS;
       u32 initial_playery = gs->movement.initial_player_tiley * TILE_DIMENSION_PIXELS;
@@ -1477,17 +1535,17 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
       u32 final_playery = gs->movement.final_player_tiley * TILE_DIMENSION_PIXELS;
 
       // TODO(law): Try non-linear interpolations for better game feel.
-      float playert = gs->player_animation_seconds_remaining / PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS;
-      playerx = LERP(final_playerx, playert, initial_playerx);
-      playery = LERP(final_playery, playert, initial_playery);
+      float playert = gs->player_movement.seconds_remaining / gs->player_movement.seconds_duration;
+      playerx = (final_playerx != initial_playerx) ? LERP(final_playerx, playert, initial_playerx) : initial_playerx;
+      playery = (final_playery != initial_playery) ? LERP(final_playery, playert, initial_playery) : initial_playery;
 
-      if(is_any_box_animating(gs))
+      if(is_any_box_moving(gs))
       {
          assert(gs->movement.player_tile_delta);
          assert(gs->movement.box_tile_delta);
 
          float distance_ratio = (float)gs->movement.box_tile_delta / (float)gs->movement.player_tile_delta;
-         float box_animation_length_in_seconds = PLAYER_MOVEMENT_ANIMATION_LENGTH_IN_SECONDS * distance_ratio;
+         float box_animation_length_in_seconds = gs->player_movement.seconds_duration * distance_ratio;
 
          float initial_boxx = (float)gs->movement.initial_box_tilex * TILE_DIMENSION_PIXELS;
          float initial_boxy = (float)gs->movement.initial_box_tiley * TILE_DIMENSION_PIXELS;
@@ -1497,12 +1555,12 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
 
          float boxx = initial_boxx;
          float boxy = initial_boxy;
-         if(box_animation_length_in_seconds >= gs->player_animation_seconds_remaining)
+         if(box_animation_length_in_seconds >= gs->player_movement.seconds_remaining)
          {
             // TODO(law): Try non-linear interpolations for better game feel.
-            float boxt = gs->player_animation_seconds_remaining / box_animation_length_in_seconds;
-            boxx = LERP(final_boxx, boxt, initial_boxx);
-            boxy = LERP(final_boxy, boxt, initial_boxy);
+            float boxt = gs->player_movement.seconds_remaining / box_animation_length_in_seconds;
+            boxx = (final_boxx != initial_boxx) ? LERP(final_boxx, boxt, initial_boxx) : final_boxx;
+            boxy = (final_boxy != initial_boxy) ? LERP(final_boxy, boxt, initial_boxy) : final_boxy;
          }
 
          // NOTE(law): Render the on-goal version if the box was previously on a
@@ -1536,9 +1594,17 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    texty += text_height;
 
    // NOTE(law): Render level transition overlay.
-   if(gs->transition_animation_seconds_remaining > 0)
+   if(is_animating(&gs->level_transition))
    {
-      float alpha = gs->transition_animation_seconds_remaining / LEVEL_TRANSITION_ANIMATION_LENGTH_IN_SECONDS;
+      float alpha = gs->level_transition.seconds_remaining / gs->level_transition.seconds_duration;
       immediate_screen_bitmap(render_output, gs->snapshot, alpha);
+   }
+
+   // TODO(law): Checking for level completion at the end of the frame prevents
+   // the final movement animation from ending early, but still only renders one
+   // frame of the box on the goal. Play some kind of animation instead.
+   if(is_level_complete(gs))
+   {
+      level = next_level(gs, render_output);
    }
 }
