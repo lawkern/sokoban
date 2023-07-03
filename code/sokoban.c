@@ -404,16 +404,17 @@ function void load_font(struct font_glyphs *font, struct memory_arena *arena, ch
    struct platform_file file = platform_load_file(file_path);
    assert(file.memory);
 
-   copy_memory(font, file.memory, sizeof(struct font_glyphs));
-   file.memory += sizeof(struct font_glyphs);
+   u8 *memory = file.memory;
+   copy_memory(font, memory, sizeof(struct font_glyphs));
+   memory += sizeof(struct font_glyphs);
 
    u32 codepoint_count = ARRAY_LENGTH(font->glyphs);
 
    size_t pair_distances_size = codepoint_count * codepoint_count * sizeof(float);
    font->pair_distances = ALLOCATE_SIZE(arena, pair_distances_size);
 
-   copy_memory(font->pair_distances, file.memory, pair_distances_size);
-   file.memory += pair_distances_size;
+   copy_memory(font->pair_distances, memory, pair_distances_size);
+   memory += pair_distances_size;
 
    for(u32 index = 0; index < codepoint_count; ++index)
    {
@@ -422,8 +423,8 @@ function void load_font(struct font_glyphs *font, struct memory_arena *arena, ch
       size_t size = glyph->width * glyph->height * sizeof(u32);
       glyph->memory = ALLOCATE_SIZE(arena, size);
 
-      copy_memory(glyph->memory, file.memory, size);
-      file.memory += size;
+      copy_memory(glyph->memory, memory, size);
+      memory += size;
    }
 
    platform_free_file(&file);
