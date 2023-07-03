@@ -424,6 +424,34 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
 
       switch(keycode)
       {
+         case VK_RETURN:
+         {
+            if(is_alt_pressed)
+            {
+               if(key_is_pressed && key_changed_state)
+               {
+                  win32_toggle_fullscreen(message.hwnd);
+               }
+            }
+            else
+            {
+               input->confirm.is_pressed = key_is_pressed;
+               input->confirm.changed_state = key_changed_state;
+            }
+         } break;
+
+         case 'P':
+         {
+            input->pause.is_pressed = key_is_pressed;
+            input->pause.changed_state = key_changed_state;
+         } break;
+
+         case 'Q':
+         {
+            input->cancel.is_pressed = key_is_pressed;
+            input->cancel.changed_state = key_changed_state;
+         } break;
+
          case VK_UP:
          case 'W':
          {
@@ -492,14 +520,6 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
          case VK_F11:
          {
             if(key_is_pressed && key_changed_state)
-            {
-               win32_toggle_fullscreen(message.hwnd);
-            }
-         } break;
-
-         case VK_RETURN:
-         {
-            if(is_alt_pressed && key_is_pressed && key_changed_state)
             {
                win32_toggle_fullscreen(message.hwnd);
             }
