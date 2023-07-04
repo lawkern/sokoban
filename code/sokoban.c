@@ -408,7 +408,21 @@ function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file
    {
       for(s32 x = 0; x < result.width; ++x)
       {
-         result.memory[(y * result.width) + x] = *(row + x);
+         u32 color = *(row + x);
+         float r = (float)((color >> 16) & 0xFF);
+         float g = (float)((color >>  8) & 0xFF);
+         float b = (float)((color >>  0) & 0xFF);
+         float a = (float)((color >> 24) & 0xFF);
+
+         float anormal = a / 255.0f;
+         r *= anormal;
+         g *= anormal;
+         b *= anormal;
+
+         result.memory[(y * result.width) + x] = (((u32)(r + 0.5f) << 16) |
+                                                  ((u32)(g + 0.5f) << 8) |
+                                                  ((u32)(b + 0.5f) << 0) |
+                                                  ((u32)(a + 0.5f) << 24));
       }
 
       row -= result.width;
@@ -906,17 +920,17 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
          u32 *destination_pixel = destination.memory + (y * destination.width) + x;
 
          u32 destination_color = *destination_pixel;
-         u8 dr = (destination_color >> 16) & 0xFF;
-         u8 dg = (destination_color >>  8) & 0xFF;
-         u8 db = (destination_color >>  0) & 0xFF;
-         u8 da = (destination_color >> 24) & 0xFF;
+         float dr = (float)((destination_color >> 16) & 0xFF);
+         float dg = (float)((destination_color >>  8) & 0xFF);
+         float db = (float)((destination_color >>  0) & 0xFF);
+         float da = (float)((destination_color >> 24) & 0xFF);
 
-         float at = (sa * alpha) / 255.0f;
+         float anormal = (sa * alpha) / 255.0f;
 
-         float r = LERP(dr, at, sr);
-         float g = LERP(dg, at, sg);
-         float b = LERP(db, at, sb);
-         float a = da;
+         float r = LERP(dr, anormal, sr);
+         float g = LERP(dg, anormal, sg);
+         float b = LERP(db, anormal, sb);
+         float a = LERP(da, anormal, sa);
 
          u32 color = (((u32)(r + 0.5f) << 16) |
                       ((u32)(g + 0.5f) << 8) |
@@ -999,17 +1013,17 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
          u32 *destination_pixel = destination.memory + (destinationy * destination.width) + destinationx;
 
          u32 destination_color = *destination_pixel;
-         u8 dr = (destination_color >> 16) & 0xFF;
-         u8 dg = (destination_color >>  8) & 0xFF;
-         u8 db = (destination_color >>  0) & 0xFF;
-         u8 da = (destination_color >> 24) & 0xFF;
+         float dr = (float)((destination_color >> 16) & 0xFF);
+         float dg = (float)((destination_color >>  8) & 0xFF);
+         float db = (float)((destination_color >>  0) & 0xFF);
+         float da = (float)((destination_color >> 24) & 0xFF);
 
-         float at = sa / 255.0f;
+         float anormal = sa / 255.0f;
 
-         float r = LERP(dr, at, sr);
-         float g = LERP(dg, at, sg);
-         float b = LERP(db, at, sb);
-         float a = da;
+         float r = ((1.0f - anormal) * dr) + sr;
+         float g = ((1.0f - anormal) * dg) + sg;
+         float b = ((1.0f - anormal) * db) + sb;
+         float a = ((1.0f - anormal) * da) + sa;
 
          u32 color = (((u32)(r + 0.5f) << 16) |
                       ((u32)(g + 0.5f) << 8) |
@@ -1070,13 +1084,13 @@ function void immediate_text(struct render_bitmap destination, struct font_glyph
    }
 }
 
-function void snapshot_screen(struct game_state *gs, struct render_bitmap snapshot)
+function void snapshot_screen(struct game_state *gs, struct render_bitmap source)
 {
-   assert(snapshot.width == gs->snapshot.width);
-   assert(snapshot.height == gs->snapshot.height);
+   assert(source.width == gs->snapshot.width);
+   assert(source.height == gs->snapshot.height);
 
-   size_t snapshot_size = snapshot.width * snapshot.height * sizeof(u32);
-   copy_memory(gs->snapshot.memory, snapshot.memory, snapshot_size);
+   size_t snapshot_size = source.width * source.height * sizeof(u32);
+   copy_memory(gs->snapshot.memory, source.memory, snapshot_size);
 }
 
 function void begin_animation(struct animation_timer *animation)
