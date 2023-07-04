@@ -459,12 +459,6 @@ function void load_font(struct font_glyphs *font, struct memory_arena *arena, ch
    platform_free_file(&file);
 }
 
-function bool is_inconsequential_whitespace(char c)
-{
-   bool result = (c == '\r' || c == '\t' || c == '\f' || c == '\v');
-   return(result);
-}
-
 function bool is_tile_position_in_bounds(u32 x, u32 y)
 {
    bool result = (x >= 0 && x < SCREEN_TILE_COUNT_X &&
@@ -539,63 +533,74 @@ function enum wall_type get_wall_type(struct tile_map_state *map, u32 x, u32 y)
    return(result);
 }
 
+function bool is_tile_character(char c)
+{
+   bool result = (c == '@' || c == '+' || c == '$' || c == '*'|| c == '#' || c == '.' || c == ' ');
+   return(result);
+}
+
 function void load_level(struct game_state *gs, struct game_level *level, char *file_path)
 {
    // NOTE(law): Clear level contents.
    zero_memory(level, sizeof(*level));
 
-   level->file_path = file_path;
+   u32 level_width = 0;
+   u32 level_height = 0;
 
-   struct platform_file level_file = platform_load_file(file_path);
+   u8 tile_characters[SCREEN_TILE_COUNT_X * SCREEN_TILE_COUNT_Y];
+   for(u32 index = 0; index < ARRAY_LENGTH(tile_characters); ++index)
    {
-      size_t index = 0;
-      u32 x = 0;
-      u32 y = 0;
+      tile_characters[index] = ' ';
+   }
 
-      u32 level_width = 0;
-      u32 level_height = 0;
-
+   level->file_path = file_path;
+   struct platform_file level_file = platform_load_file(level->file_path);
+   {
       // NOTE(law): Calculate width and height of level.
-      while(index < level_file.size)
+      u32 x = 0;
+      size_t byte_index = 0;
+      while(byte_index < level_file.size)
       {
-         u8 tile = level_file.memory[index++];
-         if(is_inconsequential_whitespace(tile))
+         u8 tile = level_file.memory[byte_index++];
+         if(is_tile_character(tile))
          {
-            continue;
+            tile_characters[(level_height * SCREEN_TILE_COUNT_X) + x++] = tile;
+            if(x > level_width)
+            {
+               level_width = x;
+            }
          }
-
-         if(x > level_width)  {level_width  = x;}
-         if(y > level_height) {level_height = y;}
-
-         x++;
-         if(tile == '\n')
+         else if(tile == '\n')
          {
-            y++;
+            // TODO(law): This will fail to capture the bottom row of tiles in
+            // the case where the level file does not include a trailing
+            // newline. Automatic newline insertion?
+
             x = 0;
+            level_height++;
          }
       }
+   }
+   platform_free_file(&level_file);
 
-      // NOTE(law): Offset tiles so the level is centered based on its size.
-      u32 offsetx = (SCREEN_TILE_COUNT_X - level_width) / 2;
-      u32 offsety = (SCREEN_TILE_COUNT_Y - level_height) / 2;
+   // NOTE(law): Offset tiles so the level is centered based on its size.
+   u32 minx = (SCREEN_TILE_COUNT_X - level_width) / 2;
+   u32 miny = (SCREEN_TILE_COUNT_Y - level_height) / 2;
 
-      assert(is_tile_position_in_bounds(offsetx + level_width, offsety + level_height));
+   u32 maxx = minx + level_width - 1;
+   u32 maxy = miny + level_height - 1;
 
-      index = 0;
-      x = offsetx;
-      y = offsety;
-
-      while(index < level_file.size)
+   for(u32 y = miny; y <= maxy; ++y)
+   {
+      for(u32 x = minx; x <= maxx; ++x)
       {
-         assert(is_tile_position_in_bounds(x, y));
+         u32 sourcex = x - minx;
+         u32 sourcey = y - miny;
 
-         u8 tile_character = level_file.memory[index++];
-         if(is_inconsequential_whitespace(tile_character))
-         {
-            continue;
-         }
+         u8 tile = tile_characters[(sourcey * SCREEN_TILE_COUNT_X) + sourcex];
+         assert(is_tile_character(tile));
 
-         switch(tile_character)
+         switch(tile)
          {
             case '@': {level->map.tiles[y][x] = TILE_TYPE_PLAYER;} break;
             case '+': {level->map.tiles[y][x] = TILE_TYPE_PLAYER_ON_GOAL;} break;
@@ -603,7 +608,8 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
             case '*': {level->map.tiles[y][x] = TILE_TYPE_BOX_ON_GOAL;} break;
             case '#': {level->map.tiles[y][x] = TILE_TYPE_WALL;} break;
             case '.': {level->map.tiles[y][x] = TILE_TYPE_GOAL;} break;
-            default:  {level->map.tiles[y][x] = TILE_TYPE_FLOOR;} break;
+            case ' ': {level->map.tiles[y][x] = TILE_TYPE_FLOOR;} break;
+            default:  {assert(!"Unhandled character in level file.");} break;
          }
 
          enum tile_type type = level->map.tiles[y][x];
@@ -612,16 +618,8 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
             level->map.player_tilex = x;
             level->map.player_tiley = y;
          }
-
-         x++;
-         if(tile_character == '\n')
-         {
-            y++;
-            x = offsetx;
-         }
       }
    }
-   platform_free_file(&level_file);
 
    // NOTE(law): Handle any post-processing after tiles are read into memory.
    for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
@@ -1406,8 +1404,10 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
       load_font(&gs->font, &gs->arena, "../data/atari.font");
 
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/simple.sok");
-      load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/skull.sok");
+      load_level(gs, gs->levels[gs->level_count++], "../data/levels/snake.sok");
+      load_level(gs, gs->levels[gs->level_count++], "../data/levels/chunky.sok");
+      load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
 
       gs->floor[0] = load_bitmap(&gs->arena, "../data/floor00.bmp");
       gs->floor[1] = load_bitmap(&gs->arena, "../data/floor01.bmp");
