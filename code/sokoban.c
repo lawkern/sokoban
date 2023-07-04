@@ -276,6 +276,7 @@ struct tile_attributes
 
 struct game_level
 {
+   char *name;
    char *file_path;
    struct tile_map_state map;
    struct tile_attributes attributes[SCREEN_TILE_COUNT_Y][SCREEN_TILE_COUNT_X];
@@ -567,7 +568,17 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
       tile_characters[index] = ' ';
    }
 
+   level->name = file_path;
    level->file_path = file_path;
+
+   char *scan = level->name;
+   while(*scan)
+   {
+      if(*scan == '/') {level->name = scan + 1;}
+      scan++;
+   }
+   assert(level->name);
+
    struct platform_file level_file = platform_load_file(level->file_path);
    {
       // NOTE(law): Calculate width and height of level.
@@ -1610,6 +1621,9 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    float text_height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE;
    float textx = 0.5f * TILE_DIMENSION_PIXELS;
    float texty = 0.5f * text_height;
+
+   immediate_text(render_output, &gs->font, textx, texty, "Level: %s", level->name);
+   texty += text_height;
 
    immediate_text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);
    texty += text_height;
