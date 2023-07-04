@@ -902,7 +902,7 @@ function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 m
    }
 }
 
-function void immediate_screen_bitmap(struct render_bitmap destination, struct render_bitmap source, float alpha)
+function void immediate_screen_bitmap(struct render_bitmap destination, struct render_bitmap source, float alpha_modulation)
 {
    assert(destination.width == source.width);
    assert(destination.height == source.height);
@@ -912,10 +912,16 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
       for(s32 x = 0; x < destination.width; ++x)
       {
          u32 source_color = source.memory[(y * source.width) + x];
+
          float sr = (float)((source_color >> 16) & 0xFF);
          float sg = (float)((source_color >>  8) & 0xFF);
          float sb = (float)((source_color >>  0) & 0xFF);
          float sa = (float)((source_color >> 24) & 0xFF);
+
+         float sanormal = (sa / 255.0f) * alpha_modulation;
+         sr *= alpha_modulation;
+         sg *= alpha_modulation;
+         sb *= alpha_modulation;
 
          u32 *destination_pixel = destination.memory + (y * destination.width) + x;
 
@@ -925,12 +931,15 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
          float db = (float)((destination_color >>  0) & 0xFF);
          float da = (float)((destination_color >> 24) & 0xFF);
 
-         float anormal = (sa * alpha) / 255.0f;
+         float danormal = da / 255.0f;
 
-         float r = LERP(dr, anormal, sr);
-         float g = LERP(dg, anormal, sg);
-         float b = LERP(db, anormal, sb);
-         float a = LERP(da, anormal, sa);
+         // NOTE(law): Seems like the a computation doesn't redistribute like
+         // the other channels due to the alpha_modulation.
+
+         float r = ((1.0f - sanormal) * dr) + sr;
+         float g = ((1.0f - sanormal) * dg) + sg;
+         float b = ((1.0f - sanormal) * db) + sb;
+         float a = (sanormal + danormal - (sanormal * danormal)) * 255.0f;
 
          u32 color = (((u32)(r + 0.5f) << 16) |
                       ((u32)(g + 0.5f) << 8) |
@@ -1018,12 +1027,13 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
          float db = (float)((destination_color >>  0) & 0xFF);
          float da = (float)((destination_color >> 24) & 0xFF);
 
-         float anormal = sa / 255.0f;
+         float sanormal = sa / 255.0f;
+         float danormal = da / 255.0f;
 
-         float r = ((1.0f - anormal) * dr) + sr;
-         float g = ((1.0f - anormal) * dg) + sg;
-         float b = ((1.0f - anormal) * db) + sb;
-         float a = ((1.0f - anormal) * da) + sa;
+         float r = ((1.0f - sanormal) * dr) + sr;
+         float g = ((1.0f - sanormal) * dg) + sg;
+         float b = ((1.0f - sanormal) * db) + sb;
+         float a = ((1.0f - sanormal) * da) + sa;
 
          u32 color = (((u32)(r + 0.5f) << 16) |
                       ((u32)(g + 0.5f) << 8) |
