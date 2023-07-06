@@ -43,6 +43,7 @@ function PLATFORM_LOG(platform_log);
 enum platform_timer_id
 {
    PLATFORM_TIMER_update,
+   PLATFORM_TIMER_immediate_clear,
    PLATFORM_TIMER_immediate_bitmap,
    PLATFORM_TIMER_immediate_screen_bitmap,
 
@@ -923,6 +924,10 @@ function struct movement_result move_player(struct game_level *level, enum playe
 
 function void immediate_clear(struct render_bitmap destination, u32 color)
 {
+   // START: 6830424 cycles
+
+   TIMER_BEGIN(immediate_clear);
+
    for(s32 y = 0; y < destination.height; ++y)
    {
       for(s32 x = 0; x < destination.width; ++x)
@@ -931,6 +936,8 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
          destination.memory[destination_index] = color;
       }
    }
+
+   TIMER_END(immediate_clear);
 }
 
 typedef struct
@@ -965,51 +972,82 @@ function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 m
 
 function void immediate_screen_bitmap(struct render_bitmap destination, struct render_bitmap source, float alpha_modulation)
 {
+   // START:   29638612 cycles
+   // CURRENT: 10728806 cycles
+
    assert(destination.width == source.width);
    assert(destination.height == source.height);
 
    TIMER_BEGIN(immediate_screen_bitmap);
 
+   // TODO(law): Loft the intrinsics out so we can support other SIMD
+   // instruction sets (AVX, NEON, etc.).
+
+   __m128i mask255 = _mm_set1_epi32(0xFF);
+
+   __m128 wide_one          = _mm_set_ps1(1.0f);
+   __m128 wide_half         = _mm_set_ps1(0.5f);
+   __m128 wide_255          = _mm_set_ps1(255.0f);
+   __m128 wide_one_over_255 = _mm_set_ps1(1.0f / 255.0f);
+
+   __m128 wide_alpha_modulation          = _mm_set_ps1(alpha_modulation);
+   __m128 wide_alpha_modulation_over_255 = _mm_set_ps1(alpha_modulation / 255.0f);
+
    for(s32 y = 0; y < destination.height; ++y)
    {
-      for(s32 x = 0; x < destination.width; ++x)
+      u32 *source_row = source.memory + (y * source.width);
+      u32 *destination_row = destination.memory + (y * destination.width);
+
+      for(s32 x = 0; x < destination.width; x += 4)
       {
-         u32 source_color = source.memory[(y * source.width) + x];
+         __m128i *source_pixels = (__m128i *)(source_row + x);
+         __m128i *destination_pixels = (__m128i *)(destination_row + x);
 
-         float sr = (float)((source_color >> 16) & 0xFF);
-         float sg = (float)((source_color >>  8) & 0xFF);
-         float sb = (float)((source_color >>  0) & 0xFF);
-         float sa = (float)((source_color >> 24) & 0xFF);
+         __m128i source_color = _mm_load_si128(source_pixels);
+         __m128i destination_color = _mm_load_si128(destination_pixels);
 
-         float sanormal = (sa / 255.0f) * alpha_modulation;
-         sr *= alpha_modulation;
-         sg *= alpha_modulation;
-         sb *= alpha_modulation;
+         __m128 source_r = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 16), mask255));
+         __m128 source_g = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 8), mask255));
+         __m128 source_b = _mm_cvtepi32_ps(_mm_and_si128(source_color, mask255));
+         __m128 source_a = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 24), mask255));
 
-         u32 *destination_pixel = destination.memory + (y * destination.width) + x;
+         __m128 destination_r = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(destination_color, 16), mask255));
+         __m128 destination_g = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(destination_color, 8), mask255));
+         __m128 destination_b = _mm_cvtepi32_ps(_mm_and_si128(destination_color, mask255));
+         __m128 destination_a = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(destination_color, 24), mask255));
 
-         u32 destination_color = *destination_pixel;
-         float dr = (float)((destination_color >> 16) & 0xFF);
-         float dg = (float)((destination_color >>  8) & 0xFF);
-         float db = (float)((destination_color >>  0) & 0xFF);
-         float da = (float)((destination_color >> 24) & 0xFF);
+         source_r = _mm_mul_ps(source_r, wide_alpha_modulation);
+         source_g = _mm_mul_ps(source_g, wide_alpha_modulation);
+         source_b = _mm_mul_ps(source_b, wide_alpha_modulation);
 
-         float danormal = da / 255.0f;
+         __m128 source_anormal = _mm_mul_ps(wide_alpha_modulation_over_255, source_a);
+         __m128 destination_anormal = _mm_mul_ps(wide_one_over_255, destination_a);
+         __m128 inverse_source_anormal = _mm_sub_ps(wide_one, source_anormal);
+
+         __m128 r = _mm_add_ps(_mm_mul_ps(inverse_source_anormal, destination_r), source_r);
+         __m128 g = _mm_add_ps(_mm_mul_ps(inverse_source_anormal, destination_g), source_g);
+         __m128 b = _mm_add_ps(_mm_mul_ps(inverse_source_anormal, destination_b), source_b);
 
          // NOTE(law): Seems like the a computation doesn't redistribute like
          // the other channels due to the alpha_modulation.
 
-         float r = ((1.0f - sanormal) * dr) + sr;
-         float g = ((1.0f - sanormal) * dg) + sg;
-         float b = ((1.0f - sanormal) * db) + sb;
-         float a = (sanormal + danormal - (sanormal * danormal)) * 255.0f;
+         __m128 a = _mm_mul_ps(source_anormal, destination_anormal);
+         a = _mm_add_ps(a, source_anormal);
+         a = _mm_add_ps(a, source_anormal);
+         a = _mm_mul_ps(a, wide_255);
 
-         u32 color = (((u32)(r + 0.5f) << 16) |
-                      ((u32)(g + 0.5f) << 8) |
-                      ((u32)(b + 0.5f) << 0) |
-                      ((u32)(a + 0.5f) << 24));
+         r = _mm_add_ps(r, wide_half);
+         g = _mm_add_ps(g, wide_half);
+         b = _mm_add_ps(b, wide_half);
+         a = _mm_add_ps(a, wide_half);
 
-         *destination_pixel = color;
+         __m128i shift_r = _mm_slli_epi32(_mm_cvttps_epi32(r), 16);
+         __m128i shift_g = _mm_slli_epi32(_mm_cvttps_epi32(g), 8);
+         __m128i shift_b = _mm_cvttps_epi32(b);
+         __m128i shift_a = _mm_slli_epi32(_mm_cvttps_epi32(a), 24);
+
+         __m128i color = _mm_or_si128(_mm_or_si128(shift_r, shift_g), _mm_or_si128(shift_b, shift_a));
+         _mm_storeu_si128(destination_pixels, color);
       }
    }
 
@@ -1535,12 +1573,10 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    {
       return;
    }
-
    if(pause_menu(gs, render_output, input))
    {
       return;
    }
-
    if(was_pressed(input->pause))
    {
       gs->menu_state = MENU_STATE_PAUSE;
@@ -1556,7 +1592,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    }
    else
    {
-      // NOTE(law): Process player input.
+      // NOTE(law): Process player movement.
       gs->movement = (struct movement_result){0};
 
       enum player_movement movement = PLAYER_MOVEMENT_WALK;
@@ -1590,23 +1626,24 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
       {
          begin_animation(&gs->player_movement);
       }
-   }
 
-   if(was_pressed(input->undo))
-   {
-      pop_undo(level);
-   }
-   else if(was_pressed(input->reload))
-   {
-      reload_level(gs, render_output);
-   }
-   else if(was_pressed(input->next))
-   {
-      level = next_level(gs, render_output);
-   }
-   else if(was_pressed(input->previous))
-   {
-      level = previous_level(gs, render_output);
+      // NOTE(law): Process other input interactions.
+      if(was_pressed(input->undo))
+      {
+         pop_undo(level);
+      }
+      else if(was_pressed(input->reload))
+      {
+         reload_level(gs, render_output);
+      }
+      else if(was_pressed(input->next))
+      {
+         level = next_level(gs, render_output);
+      }
+      else if(was_pressed(input->previous))
+      {
+         level = previous_level(gs, render_output);
+      }
    }
 
    // NOTE(law): Clear the screen each frame.

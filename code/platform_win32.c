@@ -3,6 +3,8 @@
 /* /////////////////////////////////////////////////////////////////////////// */
 
 #include <windows.h>
+#include <immintrin.h>
+
 #include <stdio.h>
 
 typedef HANDLE platform_semaphore;
