@@ -36,14 +36,66 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef int32_t s32;
 
+#define PLATFORM_LOG(name) void name(char *format, ...)
+function PLATFORM_LOG(platform_log);
+
+#if DEVELOPMENT_BUILD
+enum platform_timer_id
+{
+   PLATFORM_TIMER_update,
+   PLATFORM_TIMER_immediate_bitmap,
+   PLATFORM_TIMER_immediate_screen_bitmap,
+
+   PLATFORM_TIMER_COUNT,
+};
+
+struct platform_timer
+{
+   char *label;
+
+   u64 start;
+   u64 elapsed;
+   u64 hits;
+};
+
+global struct platform_timer global_platform_timers[256];
+
+#   define PLATFORM_TIMER_BEGIN(name) void name(enum platform_timer_id id, char *label)
+#   define PLATFORM_TIMER_END(name) void name(enum platform_timer_id id)
+
+function PLATFORM_TIMER_BEGIN(platform_timer_begin);
+function PLATFORM_TIMER_END(platform_timer_end);
+
+function void print_timers(u32 frame_count)
+{
+   for(u32 index = 0; index < PLATFORM_TIMER_COUNT; ++index)
+   {
+      struct platform_timer *timer = global_platform_timers + index;
+      if(timer->hits > 0)
+      {
+         platform_log("TIMER %s: %llu hit(s), ", timer->label, timer->hits);
+         platform_log("%llu cycles/hit, ", timer->elapsed / timer->hits);
+         platform_log("%llu cycles/frame\n", timer->elapsed);
+      }
+   }
+}
+
+#   define RESET_TIMERS() zero_memory(global_platform_timers, sizeof(global_platform_timers))
+#   define TIMER_BEGIN(id) platform_timer_begin(PLATFORM_TIMER_##id, #id)
+#   define TIMER_END(id) platform_timer_end(PLATFORM_TIMER_##id)
+#   define PRINT_TIMERS(frame_count) print_timers(frame_count)
+#else
+#   define RESET_TIMERS()
+#   define TIMER_BEGIN(id)
+#   define TIMER_END(id)
+#   define PRINT_TIMERS(frame_count)
+#endif
+
 struct platform_file
 {
    size_t size;
    u8 *memory;
 };
-
-#define PLATFORM_LOG(name) void name(char *format, ...)
-function PLATFORM_LOG(platform_log);
 
 #define PLATFORM_FREE_FILE(name) void name(struct platform_file *file)
 function PLATFORM_FREE_FILE(platform_free_file);
@@ -51,9 +103,7 @@ function PLATFORM_FREE_FILE(platform_free_file);
 #define PLATFORM_LOAD_FILE(name) struct platform_file name(char *file_path)
 function PLATFORM_LOAD_FILE(platform_load_file);
 
-struct platform_work_queue;
-
-#define PLATFORM_QUEUE_CALLBACK(name) void name(struct platform_work_queue *queue, void *data)
+#define PLATFORM_QUEUE_CALLBACK(name) void name(void *data)
 typedef PLATFORM_QUEUE_CALLBACK(queue_callback);
 
 struct queue_entry
@@ -918,6 +968,8 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
    assert(destination.width == source.width);
    assert(destination.height == source.height);
 
+   TIMER_BEGIN(immediate_screen_bitmap);
+
    for(s32 y = 0; y < destination.height; ++y)
    {
       for(s32 x = 0; x < destination.width; ++x)
@@ -960,6 +1012,8 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
          *destination_pixel = color;
       }
    }
+
+   TIMER_END(immediate_screen_bitmap);
 }
 
 // TODO(law): Remove dependency on math.h!
@@ -980,6 +1034,8 @@ function s32 ceiling_s32(float value)
 function void immediate_bitmap(struct render_bitmap destination, struct render_bitmap source,
                                float posx, float posy, s32 render_width, s32 render_height)
 {
+   TIMER_BEGIN(immediate_bitmap);
+
    // NOTE(law): Assuming tile size of 32x32: when aligned to pixel boundaries,
    // x and y should range from 0 to 31 inclusive. This results in writing 32
    // pixels per row. When unaligned (say 0.5 to 31.5), the range becomes 0 to
@@ -1039,7 +1095,6 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
          float da = (float)((destination_color >> 24) & 0xFF);
 
          float sanormal = sa / 255.0f;
-         float danormal = da / 255.0f;
 
          float r = ((1.0f - sanormal) * dr) + sr;
          float g = ((1.0f - sanormal) * dg) + sg;
@@ -1054,6 +1109,8 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
          *destination_pixel = color;
       }
    }
+
+   TIMER_END(immediate_bitmap);
 }
 
 function void immediate_tile_bitmap(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
@@ -1369,8 +1426,8 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
    platform_complete_queue(queue);
 }
 
-function bool title_menu(struct game_state *gs, struct render_bitmap render_output, struct game_input *input,
-                         struct platform_work_queue *queue, float frame_seconds_elapsed)
+function bool title_menu(struct game_state *gs, struct render_bitmap render_output,
+                         struct game_input *input, struct platform_work_queue *queue)
 {
    bool result = (gs->menu_state == MENU_STATE_TITLE);
    if(result)
@@ -1395,8 +1452,7 @@ function bool title_menu(struct game_state *gs, struct render_bitmap render_outp
    return(result);
 }
 
-function bool pause_menu(struct game_state *gs, struct render_bitmap render_output,
-                         struct game_input *input, float frame_seconds_elapsed)
+function bool pause_menu(struct game_state *gs, struct render_bitmap render_output, struct game_input *input)
 {
    bool result = (gs->menu_state == MENU_STATE_PAUSE);
    if(result)
@@ -1475,12 +1531,21 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
       gs->is_initialized = true;
    }
 
-   if(title_menu(gs, render_output, input, queue, frame_seconds_elapsed))
+   if(title_menu(gs, render_output, input, queue))
    {
       return;
    }
-   else if(pause_menu(gs, render_output, input, frame_seconds_elapsed))
+
+   if(pause_menu(gs, render_output, input))
    {
+      return;
+   }
+
+   if(was_pressed(input->pause))
+   {
+      gs->menu_state = MENU_STATE_PAUSE;
+      snapshot_screen(gs, render_output);
+
       return;
    }
 
@@ -1492,13 +1557,6 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    else
    {
       // NOTE(law): Process player input.
-      if(was_pressed(input->pause))
-      {
-         gs->menu_state = MENU_STATE_PAUSE;
-         snapshot_screen(gs, render_output);
-         return;
-      }
-
       gs->movement = (struct movement_result){0};
 
       enum player_movement movement = PLAYER_MOVEMENT_WALK;
@@ -1622,7 +1680,7 @@ function void update(struct game_state *gs, struct render_bitmap render_output, 
    float textx = 0.5f * TILE_DIMENSION_PIXELS;
    float texty = 0.5f * text_height;
 
-   immediate_text(render_output, &gs->font, textx, texty, "Level: %s", level->name);
+   immediate_text(render_output, &gs->font, textx, texty, "%s", level->name);
    texty += text_height;
 
    immediate_text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);

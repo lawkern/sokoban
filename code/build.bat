@@ -7,7 +7,7 @@ IF %DEVELOPMENT_BUILD%==1 (
    SET WARNING_FLAGS=%WARNING_FLAGS% -wd4100 -wd4101 -wd4189
 )
 
-SET COMPILER_FLAGS=-nologo -Z7 -Oi -Od -FC -MT -diagnostics:column %WARNING_FLAGS%
+SET COMPILER_FLAGS=-nologo -Z7 -Oi -Od -FC -MT -diagnostics:column %WARNING_FLAGS% -DDEVELOPMENT_BUILD=%DEVELOPMENT_BUILD%
 SET LINKER_FLAGS=-opt:ref -incremental:no user32.lib gdi32.lib winmm.lib
 
 IF NOT EXIST ..\build mkdir ..\build

@@ -25,8 +25,23 @@ global WINDOWPLACEMENT win32_global_previous_window_placement =
    sizeof(win32_global_previous_window_placement)
 };
 
+#if DEVELOPMENT_BUILD
+function PLATFORM_TIMER_BEGIN(platform_timer_begin)
+{
+   global_platform_timers[id].label = label;
+   global_platform_timers[id].start = __rdtsc();
+}
+
+function PLATFORM_TIMER_END(platform_timer_end)
+{
+   global_platform_timers[id].elapsed += (__rdtsc() - global_platform_timers[id].start);
+   global_platform_timers[id].hits++;
+}
+#endif
+
 function PLATFORM_LOG(platform_log)
 {
+#if DEVELOPMENT_BUILD
    char message[WIN32_LOG_MAX_LENGTH];
 
    va_list arguments;
@@ -37,6 +52,9 @@ function PLATFORM_LOG(platform_log)
    va_end(arguments);
 
    OutputDebugStringA(message);
+#else
+   (void)format;
+#endif
 }
 
 function PLATFORM_FREE_FILE(platform_free_file)
@@ -126,7 +144,7 @@ function bool win32_dequeue_work(struct platform_work_queue *queue)
    if(index == read_index)
    {
       struct queue_entry entry = queue->entries[index];
-      entry.callback(queue, entry.data);
+      entry.callback(entry.data);
 
       InterlockedIncrement(&(LONG)queue->completion_count);
    }
@@ -540,7 +558,7 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
    return(result);
 }
 
-function u32 win32_get_processor_count()
+function u32 win32_get_processor_count(void)
 {
    SYSTEM_INFO info;
    GetSystemInfo(&info);
@@ -551,6 +569,10 @@ function u32 win32_get_processor_count()
 
 int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line, int show_command)
 {
+   (void)previous_instance;
+   (void)command_line;
+   (void)show_command;
+
    QueryPerformanceFrequency(&win32_global_counts_per_second);
    bool sleep_is_granular = (timeBeginPeriod(1) == TIMERR_NOERROR);
 
@@ -654,6 +676,8 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    win32_global_is_running = true;
    while(win32_global_is_running)
    {
+      RESET_TIMERS();
+
       // TODO(law): Will clearing just the state changes result in stuck keys if
       // a WM_KEYUP or WM_SYSKEYUP message is somehow missed?
       for(u32 index = 0; index < ARRAY_LENGTH(input.buttons); ++index)
@@ -673,12 +697,13 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          DispatchMessage(&message);
       }
 
-#define USE_VARIABLE_TIMESTEP 1
-#if USE_VARIABLE_TIMESTEP
+      TIMER_BEGIN(update);
+#if 1
       update(&gs, bitmap, &input, &queue, frame_seconds_elapsed);
 #else
       update(&gs, bitmap, &input, &queue, target_seconds_per_frame);
 #endif
+      TIMER_END(update);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);
@@ -712,12 +737,16 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       }
       frame_start_count = frame_end_count;
 
-      static u32 frame_count = 0;
+#if DEVELOPMENT_BUILD
+      static u32 frame_count;
       if((frame_count++ % 30) == 0)
       {
+         PRINT_TIMERS(frame_count);
+
          platform_log("Frame time: %0.03fms, ", frame_seconds_elapsed * 1000.0f);
-         platform_log("Sleep: %ums\n", sleep_ms);
+         platform_log("Sleep: %ums\n\n", sleep_ms);
       }
+#endif
    }
 
    return(0);
