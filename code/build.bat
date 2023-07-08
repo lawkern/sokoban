@@ -13,6 +13,10 @@ SET LINKER_FLAGS=-opt:ref -incremental:no user32.lib gdi32.lib winmm.lib
 IF NOT EXIST ..\build mkdir ..\build
 PUSHD ..\build
 
-cl ..\code\platform_win32.c %COMPILER_FLAGS% -Fesokoban /link %LINKER_FLAGS%
+REM NOTE(law): Compile any resources needed by the executable
+rc -nologo -i ..\data -fo sokoban.res ..\data\sokoban.rc
+
+REM NOTE(law): Compile the actual executable
+cl ..\code\platform_win32.c sokoban.res %COMPILER_FLAGS% -Fesokoban /link %LINKER_FLAGS%
 
 POPD

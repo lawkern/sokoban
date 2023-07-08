@@ -1,0 +1,33 @@
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0, 0, 0, 1
+PRODUCTVERSION 0, 0, 0, 1
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS VS_FF_PRERELEASE|VS_FF_DEBUG
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+{
+   BLOCK "StringFileInfo"
+   {
+      BLOCK "040904E4"
+      {
+         VALUE "CompanyName", "Lawrence D. Kern"
+         VALUE "FileDescription", "Sokoban puzzle game"
+         VALUE "FileVersion", "0.0.0.1"
+         VALUE "InternalName", "sokoban"
+         VALUE "LegalCopyright", "Copyright (C) 2023"
+         VALUE "OriginalFilename", "sokoban.exe"
+         VALUE "ProductName", "Sokoban"
+         VALUE "ProductVersion", "0.0.0.1"
+      }
+   }
+
+   BLOCK "VarFileInfo"
+   {
+      VALUE "Translation", 0x409, 1252
+   }
+}
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "sokoban.exe.manifest"
