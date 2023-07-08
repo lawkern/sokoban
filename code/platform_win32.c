@@ -699,13 +699,8 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          DispatchMessage(&message);
       }
 
-      TIMER_BEGIN(update);
-#if 1
       update(&gs, bitmap, &input, &queue, frame_seconds_elapsed);
-#else
-      update(&gs, bitmap, &input, &queue, target_seconds_per_frame);
-#endif
-      TIMER_END(update);
+      // update(&gs, bitmap, &input, &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);
@@ -745,8 +740,9 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       {
          PRINT_TIMERS(frame_count);
 
-         platform_log("Frame time: %0.03fms, ", frame_seconds_elapsed * 1000.0f);
-         platform_log("Sleep: %ums\n\n", sleep_ms);
+         float frame_ms = frame_seconds_elapsed * 1000.0f;
+         platform_log("Frame time: %0.03fms, ", frame_ms);
+         platform_log("Sleep: %ums (%.2f%%)\n\n", sleep_ms, 100.0f * (sleep_ms / frame_ms));
       }
 #endif
    }
