@@ -937,6 +937,7 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
       u32 *row = destination.memory + (y * destination.width);
       for(s32 x = 0; x < destination.width; x += 4)
       {
+         // TODO(law): Align memory to 16-byte boundary so we don't need unaligned stores.
          _mm_storeu_si128((__m128i *)(row + x), wide_color);
       }
    }
@@ -1005,8 +1006,9 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
          __m128i *source_pixels      = (__m128i *)(source_row + x);
          __m128i *destination_pixels = (__m128i *)(destination_row + x);
 
-         __m128i source_color      = _mm_load_si128(source_pixels);
-         __m128i destination_color = _mm_load_si128(destination_pixels);
+         // TODO(law): Align memory to 16-byte boundary so we don't need unaligned loads.
+         __m128i source_color      = _mm_loadu_si128(source_pixels);
+         __m128i destination_color = _mm_loadu_si128(destination_pixels);
 
          __m128 source_r = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 16), wide_mask255));
          __m128 source_g = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 8), wide_mask255));
@@ -1045,6 +1047,7 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
          __m128i shift_b = _mm_cvttps_epi32(b);
          __m128i shift_a = _mm_slli_epi32(_mm_cvtps_epi32(a), 24);
 
+         // TODO(law): Align memory to 16-byte boundary so we don't need unaligned stores.
          __m128i color = _mm_or_si128(_mm_or_si128(shift_r, shift_g), _mm_or_si128(shift_b, shift_a));
          _mm_storeu_si128(destination_pixels, color);
       }
@@ -1175,7 +1178,7 @@ function void immediate_text(struct render_bitmap destination, struct font_glyph
    char *text = text_buffer;
    while(*text)
    {
-      char codepoint = *text++;
+      int codepoint = *text++;
 
       // TODO(law): Determine the best way to render pixel-perfect bitmap fonts,
       // at least at 1x and 2x scale.
@@ -1415,6 +1418,11 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
             case TILE_TYPE_PLAYER_ON_GOAL:
             {
                immediate_tile_bitmap(render_output, gs->goal, x, y);
+            } break;
+
+            default:
+            {
+               // NOTE(law): We don't handle every type here.
             } break;
          }
       }
