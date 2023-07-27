@@ -8,6 +8,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "platform_intrinsics.h"
+
 #define function static
 #define global static
 

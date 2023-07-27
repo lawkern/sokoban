@@ -713,7 +713,7 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
    // START:   6830424 cycles
    // CURRENT: 1860670 cycles
 
-   __m128i wide_color = _mm_set1_epi32(color);
+   u32_4x wide_color = u32_4x_set1(color);
 
    assert((destination.width % 4) == 0);
    for(s32 y = 0; y < destination.height; ++y)
@@ -722,7 +722,7 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
       for(s32 x = 0; x < destination.width; x += 4)
       {
          // TODO(law): Align memory to 16-byte boundary so we don't need unaligned stores.
-         _mm_storeu_si128((__m128i *)(row + x), wide_color);
+         u32_4x_storeu((u32_4x *)(row + x), wide_color);
       }
    }
 
@@ -769,16 +769,13 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
 
    TIMER_BEGIN(immediate_screen_bitmap);
 
-   // TODO(law): Loft the intrinsics out so we can support other SIMD
-   // instruction sets (AVX, NEON, etc.).
+   u32_4x wide_mask255      = u32_4x_set1(0xFF);
+   f32_4x wide_one          = f32_4x_set1(1.0f);
+   f32_4x wide_255          = f32_4x_set1(255.0f);
+   f32_4x wide_one_over_255 = f32_4x_set1(1.0f / 255.0f);
 
-   __m128i wide_mask255     = _mm_set1_epi32(0xFF);
-   __m128 wide_one          = _mm_set1_ps(1.0f);
-   __m128 wide_255          = _mm_set1_ps(255.0f);
-   __m128 wide_one_over_255 = _mm_set1_ps(1.0f / 255.0f);
-
-   __m128 wide_alpha_modulation          = _mm_set1_ps(alpha_modulation);
-   __m128 wide_alpha_modulation_over_255 = _mm_set1_ps(alpha_modulation / 255.0f);
+   f32_4x wide_alpha_modulation          = f32_4x_set1(alpha_modulation);
+   f32_4x wide_alpha_modulation_over_255 = f32_4x_set1(alpha_modulation / 255.0f);
 
    for(s32 y = 0; y < destination.height; ++y)
    {
@@ -787,53 +784,53 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
 
       for(s32 x = 0; x < destination.width; x += 4)
       {
-         __m128i *source_pixels      = (__m128i *)(source_row + x);
-         __m128i *destination_pixels = (__m128i *)(destination_row + x);
+         u32_4x *source_pixels      = (u32_4x *)(source_row + x);
+         u32_4x *destination_pixels = (u32_4x *)(destination_row + x);
 
          // TODO(law): Align memory to 16-byte boundary so we don't need unaligned loads.
-         __m128i source_color      = _mm_loadu_si128(source_pixels);
-         __m128i destination_color = _mm_loadu_si128(destination_pixels);
+         u32_4x source_color      = u32_4x_loadu(source_pixels);
+         u32_4x destination_color = u32_4x_loadu(destination_pixels);
 
-         __m128 source_r = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 16), wide_mask255));
-         __m128 source_g = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 8), wide_mask255));
-         __m128 source_b = _mm_cvtepi32_ps(_mm_and_si128(source_color, wide_mask255));
-         __m128 source_a = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(source_color, 24), wide_mask255));
+         f32_4x source_r = f32_4x_convert_u32_4x(u32_4x_and(u32_4x_srli(source_color, 16), wide_mask255));
+         f32_4x source_g = f32_4x_convert_u32_4x(u32_4x_and(u32_4x_srli(source_color, 8), wide_mask255));
+         f32_4x source_b = f32_4x_convert_u32_4x(u32_4x_and(source_color, wide_mask255));
+         f32_4x source_a = f32_4x_convert_u32_4x(u32_4x_and(u32_4x_srli(source_color, 24), wide_mask255));
 
-         __m128 destination_r = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(destination_color, 16), wide_mask255));
-         __m128 destination_g = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(destination_color, 8), wide_mask255));
-         __m128 destination_b = _mm_cvtepi32_ps(_mm_and_si128(destination_color, wide_mask255));
-         __m128 destination_a = _mm_cvtepi32_ps(_mm_and_si128(_mm_srli_epi32(destination_color, 24), wide_mask255));
+         f32_4x destination_r = f32_4x_convert_u32_4x(u32_4x_and(u32_4x_srli(destination_color, 16), wide_mask255));
+         f32_4x destination_g = f32_4x_convert_u32_4x(u32_4x_and(u32_4x_srli(destination_color, 8), wide_mask255));
+         f32_4x destination_b = f32_4x_convert_u32_4x(u32_4x_and(destination_color, wide_mask255));
+         f32_4x destination_a = f32_4x_convert_u32_4x(u32_4x_and(u32_4x_srli(destination_color, 24), wide_mask255));
 
-         source_r = _mm_mul_ps(source_r, wide_alpha_modulation);
-         source_g = _mm_mul_ps(source_g, wide_alpha_modulation);
-         source_b = _mm_mul_ps(source_b, wide_alpha_modulation);
+         source_r = f32_4x_mul(source_r, wide_alpha_modulation);
+         source_g = f32_4x_mul(source_g, wide_alpha_modulation);
+         source_b = f32_4x_mul(source_b, wide_alpha_modulation);
 
-         __m128 source_anormal = _mm_mul_ps(wide_alpha_modulation_over_255, source_a);
-         __m128 destination_anormal = _mm_mul_ps(wide_one_over_255, destination_a);
-         __m128 inverse_source_anormal = _mm_sub_ps(wide_one, source_anormal);
+         f32_4x source_anormal = f32_4x_mul(wide_alpha_modulation_over_255, source_a);
+         f32_4x destination_anormal = f32_4x_mul(wide_one_over_255, destination_a);
+         f32_4x inverse_source_anormal = f32_4x_sub(wide_one, source_anormal);
 
-         __m128 r = _mm_add_ps(_mm_mul_ps(inverse_source_anormal, destination_r), source_r);
-         __m128 g = _mm_add_ps(_mm_mul_ps(inverse_source_anormal, destination_g), source_g);
-         __m128 b = _mm_add_ps(_mm_mul_ps(inverse_source_anormal, destination_b), source_b);
+         f32_4x r = f32_4x_add(f32_4x_mul(inverse_source_anormal, destination_r), source_r);
+         f32_4x g = f32_4x_add(f32_4x_mul(inverse_source_anormal, destination_g), source_g);
+         f32_4x b = f32_4x_add(f32_4x_mul(inverse_source_anormal, destination_b), source_b);
 
          // NOTE(law): Seems like the a computation doesn't redistribute like
          // the other channels due to the alpha_modulation.
 
-         __m128 a = _mm_mul_ps(source_anormal, destination_anormal);
-         a = _mm_add_ps(a, source_anormal);
-         a = _mm_add_ps(a, source_anormal);
-         a = _mm_mul_ps(a, wide_255);
+         f32_4x a = f32_4x_mul(source_anormal, destination_anormal);
+         a = f32_4x_add(a, source_anormal);
+         a = f32_4x_add(a, source_anormal);
+         a = f32_4x_mul(a, wide_255);
 
-         // TODO(law): Confirm that _mm_cvtps_epi32 will do the appropriate
+         // TODO(law): Confirm that u32_4x_convert_f32_4x will do the appropriate
          // rounding for us.
-         __m128i shift_r = _mm_slli_epi32(_mm_cvtps_epi32(r), 16);
-         __m128i shift_g = _mm_slli_epi32(_mm_cvtps_epi32(g), 8);
-         __m128i shift_b = _mm_cvttps_epi32(b);
-         __m128i shift_a = _mm_slli_epi32(_mm_cvtps_epi32(a), 24);
+         u32_4x shift_r = u32_4x_slli(u32_4x_convert_f32_4x(r), 16);
+         u32_4x shift_g = u32_4x_slli(u32_4x_convert_f32_4x(g), 8);
+         u32_4x shift_b = u32_4x_convert_f32_4x(b);
+         u32_4x shift_a = u32_4x_slli(u32_4x_convert_f32_4x(a), 24);
 
          // TODO(law): Align memory to 16-byte boundary so we don't need unaligned stores.
-         __m128i color = _mm_or_si128(_mm_or_si128(shift_r, shift_g), _mm_or_si128(shift_b, shift_a));
-         _mm_storeu_si128(destination_pixels, color);
+         u32_4x color = u32_4x_or(u32_4x_or(shift_r, shift_g), u32_4x_or(shift_b, shift_a));
+         u32_4x_storeu(destination_pixels, color);
       }
    }
 

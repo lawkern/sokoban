@@ -8,7 +8,6 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <immintrin.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
