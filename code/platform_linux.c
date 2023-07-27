@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <immintrin.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -20,9 +21,8 @@
 #include <stdio.h>
 #include <time.h>
 
-#include <immintrin.h>
-
 typedef sem_t platform_semaphore;
+#include "platform.h"
 #include "sokoban.c"
 
 #define LINUX_WORKER_THREAD_COUNT 8
@@ -34,6 +34,21 @@ typedef sem_t platform_semaphore;
 global bool linux_global_is_running;
 global bool linux_global_is_paused;
 global Display *linux_global_display;
+
+#if DEVELOPMENT_BUILD
+function PLATFORM_TIMER_BEGIN(platform_timer_begin)
+{
+   global_platform_timers[id].id = id;
+   global_platform_timers[id].label = label;
+   global_platform_timers[id].start = __rdtsc();
+}
+
+function PLATFORM_TIMER_END(platform_timer_end)
+{
+   global_platform_timers[id].elapsed += (__rdtsc() - global_platform_timers[id].start);
+   global_platform_timers[id].hits++;
+}
+#endif
 
 function PLATFORM_LOG(platform_log)
 {
@@ -52,20 +67,6 @@ function PLATFORM_LOG(platform_log)
    (void)format;
 #endif
 }
-
-#if DEVELOPMENT_BUILD
-function PLATFORM_TIMER_BEGIN(platform_timer_begin)
-{
-   global_platform_timers[id].label = label;
-   global_platform_timers[id].start = __rdtsc();
-}
-
-function PLATFORM_TIMER_END(platform_timer_end)
-{
-   global_platform_timers[id].elapsed += (__rdtsc() - global_platform_timers[id].start);
-   global_platform_timers[id].hits++;
-}
-#endif
 
 function void *
 linux_allocate(size_t size)
@@ -159,7 +160,7 @@ function PLATFORM_ENQUEUE_WORK(platform_enqueue_work)
    u32 new_write_index = (queue->write_index + 1) % ARRAY_LENGTH(queue->entries);
    assert(new_write_index != queue->read_index);
 
-   struct queue_entry *entry = queue->entries + queue->write_index;
+   struct platform_work_queue_entry *entry = queue->entries + queue->write_index;
    entry->data = data;
    entry->callback = callback;
 
@@ -186,7 +187,7 @@ function bool linux_dequeue_work(struct platform_work_queue *queue)
    u32 index = __sync_val_compare_and_swap(&queue->read_index, read_index, new_read_index);
    if(index == read_index)
    {
-      struct queue_entry entry = queue->entries[index];
+      struct platform_work_queue_entry entry = queue->entries[index];
       entry.callback(entry.data);
 
       __sync_add_and_fetch(&queue->completion_count, 1);
@@ -721,7 +722,7 @@ function void linux_display_bitmap(Window window, struct render_bitmap bitmap)
    glXSwapBuffers(linux_global_display, window);
 }
 
-function void linux_set_key_state(struct game_input_button *button, bool is_pressed)
+function void linux_set_key_state(struct platform_input_button *button, bool is_pressed)
 {
    button->changed_state = true;
    button->is_pressed = is_pressed;
@@ -945,9 +946,9 @@ int main(int argument_count, char **arguments)
    linux_global_display = XOpenDisplay(0);
    Window window = linux_initialize_opengl(bitmap);
 
-   struct game_state gs = {0};
-   gs.arena.size = 256 * 1024 * 1024;
-   gs.arena.base_address = linux_allocate(gs.arena.size);
+   struct game_memory memory = {0};
+   memory.size = 512 * 1024 * 1024;
+   memory.base_address = linux_allocate(memory.size);
 
    struct game_input input = {0};
 
@@ -971,8 +972,8 @@ int main(int argument_count, char **arguments)
 
       linux_process_events(window, &input);
 
-      update(&gs, bitmap, &input, &queue, frame_seconds_elapsed);
-      // update(&gs, bitmap, &input, &queue, target_seconds_per_frame);
+      game_update(memory, bitmap, &input, &queue, frame_seconds_elapsed);
+      // game_update(memory, bitmap, &input, &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
       linux_display_bitmap(window, bitmap);
@@ -1004,7 +1005,7 @@ int main(int argument_count, char **arguments)
       static u32 frame_count;
       if((frame_count++ % 30) == 0)
       {
-         PRINT_TIMERS(frame_count);
+         print_timers(frame_count);
 
          float frame_ms = frame_seconds_elapsed * 1000.0f;
          u32 sleep_ms = sleep_us / 1000;

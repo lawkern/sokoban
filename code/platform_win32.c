@@ -4,10 +4,10 @@
 
 #include <windows.h>
 #include <immintrin.h>
-
 #include <stdio.h>
 
 typedef HANDLE platform_semaphore;
+#include "platform.h"
 #include "sokoban.c"
 
 #define WIN32_LOG_MAX_LENGTH 1024
@@ -30,6 +30,7 @@ global WINDOWPLACEMENT win32_global_previous_window_placement =
 #if DEVELOPMENT_BUILD
 function PLATFORM_TIMER_BEGIN(platform_timer_begin)
 {
+   global_platform_timers[id].id = id;
    global_platform_timers[id].label = label;
    global_platform_timers[id].start = __rdtsc();
 }
@@ -118,7 +119,7 @@ function PLATFORM_ENQUEUE_WORK(platform_enqueue_work)
    u32 new_write_index = (queue->write_index + 1) % ARRAY_LENGTH(queue->entries);
    assert(new_write_index != queue->read_index);
 
-   struct queue_entry *entry = queue->entries + queue->write_index;
+   struct platform_work_queue_entry *entry = queue->entries + queue->write_index;
    entry->data = data;
    entry->callback = callback;
 
@@ -145,7 +146,7 @@ function bool win32_dequeue_work(struct platform_work_queue *queue)
    u32 index = InterlockedCompareExchange(&(LONG)queue->read_index, new_read_index, read_index);
    if(index == read_index)
    {
-      struct queue_entry entry = queue->entries[index];
+      struct platform_work_queue_entry entry = queue->entries[index];
       entry.callback(entry.data);
 
       InterlockedIncrement(&(LONG)queue->completion_count);
@@ -663,9 +664,9 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    ShowWindow(window, show_command);
    UpdateWindow(window);
 
-   struct game_state gs = {0};
-   gs.arena.size = 256 * 1024 * 1024;
-   gs.arena.base_address = VirtualAlloc(0, gs.arena.size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+   struct game_memory memory = {0};
+   memory.size = 512 * 1024 * 1024;
+   memory.base_address = VirtualAlloc(0, memory.size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
 
    struct game_input input = {0};
 
@@ -699,8 +700,8 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          DispatchMessage(&message);
       }
 
-      update(&gs, bitmap, &input, &queue, frame_seconds_elapsed);
-      // update(&gs, bitmap, &input, &queue, target_seconds_per_frame);
+      game_update(memory, bitmap, &input, &queue, frame_seconds_elapsed);
+      // game_update(memory, bitmap, &input, &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);
@@ -738,7 +739,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       static u32 frame_count;
       if((frame_count++ % 30) == 0)
       {
-         PRINT_TIMERS(frame_count);
+         print_timers(frame_count);
 
          float frame_ms = frame_seconds_elapsed * 1000.0f;
          platform_log("Frame time: %0.03fms, ", frame_ms);
