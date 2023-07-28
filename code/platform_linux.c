@@ -67,8 +67,7 @@ function PLATFORM_LOG(platform_log)
 #endif
 }
 
-function void *
-linux_allocate(size_t size)
+function void *linux_allocate(size_t size)
 {
    // NOTE(law): munmap() requires the size of the allocation in order to free
    // the virtual memory. This function smuggles the allocation size just before
@@ -89,8 +88,7 @@ linux_allocate(size_t size)
    return(result);
 }
 
-function void
-linux_deallocate(void *memory)
+function void linux_deallocate(void *memory)
 {
    // NOTE(law): munmap() requires the size of the allocation in order to free
    // the virtual memory. We always just want to dump the entire thing, so
@@ -314,10 +312,8 @@ function Window linux_create_window(struct render_bitmap bitmap, XVisualInfo *vi
 // "opengl_function_" to make them uniformly accessible using the macros defined
 // below.
 
-#define DECLARE_OPENGL_FUNCTION(name) opengl_function_##name *name
-
-#define LINUX_LOAD_OPENGL_FUNCTION(name) name = (opengl_function_##name *) \
-   glXGetProcAddressARB((const GLubyte *)#name)
+#define LINUX_DECLARE_OPENGL_FUNCTION(name) opengl_function_##name *name
+#define LINUX_LOAD_OPENGL_FUNCTION(name) name = (opengl_function_##name *)glXGetProcAddressARB((const GLubyte *)#name)
 
 // TODO(law): Add any more OpenGL functions we need to the corresponding
 // sections below.
@@ -373,227 +369,13 @@ typedef   void opengl_function_glBindBuffer(GLenum target, GLuint buffer);
 typedef   void opengl_function_glBindVertexArray(GLuint array);
 typedef   void opengl_function_glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage);
 
-#define X(name) DECLARE_OPENGL_FUNCTION(name);
+#define X(name) LINUX_DECLARE_OPENGL_FUNCTION(name);
    OPENGL_FUNCTION_POINTERS
 #undef X
 
 global GLuint opengl_global_vertex_buffer_object;
 global GLuint opengl_global_vertex_array_object;
 global GLuint opengl_global_shader_program;
-
-global const char *vertex_shader_code =
-"#version 330 core\n"
-"\n"
-"layout(location = 0) in vec2 position;\n"
-"layout(location = 1) in vec2 vertex_texture_coordinate;\n"
-"out vec2 fragment_texture_coordinate;\n"
-"\n"
-"void main()\n"
-"{\n"
-"   gl_Position = vec4(position, 0.0f, 1.0f);\n"
-"   fragment_texture_coordinate = vertex_texture_coordinate;\n"
-"}\n";
-
-global const char *fragment_shader_code =
-"#version 330 core\n"
-"\n"
-"in vec2 fragment_texture_coordinate;\n"
-"out vec4 output_color;\n"
-"uniform sampler2D bitmap_texture;\n"
-"\n"
-"void main()\n"
-"{\n"
-"   output_color = texture(bitmap_texture, fragment_texture_coordinate);\n"
-"}\n";
-
-function void
-opengl_initialize()
-{
-   platform_log("=====\n");
-   platform_log("OpenGL Information:\n");
-   platform_log("Vendor: %s\n", glGetString(GL_VENDOR));
-   platform_log("Renderer: %s\n", glGetString(GL_RENDERER));
-   platform_log("Version: %s\n", glGetString(GL_VERSION));
-   platform_log("Shading Language Version: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
-   // platform_log("Extensions: %s\n", glGetString(GL_EXTENSIONS));
-   platform_log("=====\n");
-
-   // NOTE(law): Define the vertices of the bitmap we plan to blit.
-   float vertices[] =
-   {
-      // NOTE(law): Lower triangle xy positions.
-      +1, +1,
-      +1, -1,
-      -1, -1,
-
-      // NOTE(law): Upper triangle xy positions.
-      +1, +1,
-      -1, -1,
-      -1, +1,
-
-      // NOTE(law): To flip the source bitmap vertically, just reverse the y
-      // texture coordinates.
-
-      // NOTE(law): Lower triangle texture coordinates.
-      1, 0,
-      1, 1,
-      0, 1,
-
-      // NOTE(law): Upper triangle texture coordinates.
-      1, 0,
-      0, 1,
-      0, 0,
-   };
-
-   glGenVertexArrays(1, &opengl_global_vertex_array_object);
-   glBindVertexArray(opengl_global_vertex_array_object);
-   {
-      // NOTE(law): Set up vertex position buffer object.
-      glGenBuffers(1, &opengl_global_vertex_buffer_object);
-      glBindBuffer(GL_ARRAY_BUFFER, opengl_global_vertex_buffer_object);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-      glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-      glBindBuffer(GL_ARRAY_BUFFER, opengl_global_vertex_buffer_object);
-      glEnableVertexAttribArray(0);
-      glEnableVertexAttribArray(1);
-
-      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-      glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, (void *)48);
-
-      // glDisableVertexAttribArray(0);
-      // glDisableVertexAttribArray(1);
-   }
-
-   // NOTE(law): Compile vertex shader.
-   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-   glShaderSource(vertex_shader, 1, &vertex_shader_code, 0);
-   glCompileShader(vertex_shader);
-
-   GLint vertex_compilation_status;
-   glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &vertex_compilation_status);
-   if(vertex_compilation_status == GL_FALSE)
-   {
-      GLchar log[LINUX_LOG_MAX_LENGTH];
-      glGetShaderInfoLog(vertex_shader, LINUX_LOG_MAX_LENGTH, 0, log);
-
-      platform_log("ERROR: Compilation error in vertex shader.\n");
-      platform_log(log);
-   }
-   assert(vertex_compilation_status == GL_TRUE);
-
-   // NOTE(law): Compile fragment shader.
-   GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-   glShaderSource(fragment_shader, 1, &fragment_shader_code, 0);
-   glCompileShader(fragment_shader);
-
-   GLint fragment_compilation_status;
-   glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &fragment_compilation_status);
-   if(fragment_compilation_status == GL_FALSE)
-   {
-      GLchar log[LINUX_LOG_MAX_LENGTH];
-      glGetShaderInfoLog(fragment_shader, LINUX_LOG_MAX_LENGTH, 0, log);
-
-      platform_log("ERROR: Compilation error in fragment shader.\n");
-      platform_log(log);
-   }
-   assert(fragment_compilation_status == GL_TRUE);
-
-   // NOTE(law): Create shader program.
-   opengl_global_shader_program = glCreateProgram();
-   glAttachShader(opengl_global_shader_program, vertex_shader);
-   glAttachShader(opengl_global_shader_program, fragment_shader);
-   glLinkProgram(opengl_global_shader_program);
-
-   GLint program_link_status;
-   glGetProgramiv(opengl_global_shader_program, GL_LINK_STATUS, &program_link_status);
-   if(program_link_status == GL_FALSE)
-   {
-      GLchar log[LINUX_LOG_MAX_LENGTH];
-      glGetProgramInfoLog(opengl_global_shader_program, LINUX_LOG_MAX_LENGTH, 0, log);
-
-      platform_log("ERROR: Linking error in shader program.\n");
-      platform_log(log);
-   }
-   assert(program_link_status == GL_TRUE);
-
-   GLint program_status;
-   glValidateProgram(opengl_global_shader_program);
-   glGetProgramiv(opengl_global_shader_program, GL_VALIDATE_STATUS, &program_status);
-   if (program_status == GL_FALSE)
-   {
-      GLchar log[LINUX_LOG_MAX_LENGTH];
-      glGetProgramInfoLog(opengl_global_shader_program, LINUX_LOG_MAX_LENGTH, 0, log);
-
-      platform_log("ERROR: The linked shader program is invalid.\n");
-      platform_log(log);
-   }
-   assert(program_status == GL_TRUE);
-
-   // NOTE(law): Clean up the shaders once the program has been created.
-   glDetachShader(opengl_global_shader_program, vertex_shader);
-   glDetachShader(opengl_global_shader_program, fragment_shader);
-
-   glDeleteShader(vertex_shader);
-   glDeleteShader(fragment_shader);
-}
-
-function void
-opengl_display_bitmap(struct render_bitmap *bitmap, u32 client_width, u32 client_height)
-{
-   float client_aspect_ratio = (float)client_width / (float)client_height;
-   float target_aspect_ratio = (float)RESOLUTION_BASE_WIDTH / (float)RESOLUTION_BASE_HEIGHT;
-
-   float target_width  = (float)client_width;
-   float target_height = (float)client_height;
-   float gutter_width  = 0;
-   float gutter_height = 0;
-
-   if(client_aspect_ratio > target_aspect_ratio)
-   {
-      // NOTE(law): The window is too wide, fill in the left and right sides
-      // with black gutters.
-      target_width = target_aspect_ratio * (float)client_height;
-      gutter_width = (client_width - target_width) / 2;
-   }
-   else if(client_aspect_ratio < target_aspect_ratio)
-   {
-      // NOTE(law): The window is too tall, fill in the top and bottom with
-      // black gutters.
-      target_height = (1.0f / target_aspect_ratio) * (float)client_width;
-      gutter_height = (client_height - target_height) / 2;
-   }
-
-   // TODO(law): Should we only set the viewport on resize events?
-   glViewport(gutter_width, gutter_height, target_width, target_height);
-
-   // NOTE(law): Clear the window to black.
-   glClearColor(0, 0, 0, 1);
-   glClear(GL_COLOR_BUFFER_BIT);
-
-   // NOTE(law): Set up the pixel bitmap as an OpenGL texture.
-   glBindTexture(GL_TEXTURE_2D, 1);
-   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bitmap->width, bitmap->height, 0,
-                GL_BGRA_EXT, GL_UNSIGNED_BYTE, bitmap->memory);
-
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP);
-
-   glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-   glEnable(GL_TEXTURE_2D);
-
-   // NOTE(law): Draw the bitmap using the previously-defined shaders.
-   glUseProgram(opengl_global_shader_program);
-   glBindVertexArray(opengl_global_vertex_array_object);
-
-   glDrawArrays(GL_TRIANGLES, 0, 6);
-
-   glBindVertexArray(0);
-   glUseProgram(0);
-}
 
 function Window linux_initialize_opengl(struct render_bitmap bitmap)
 {
@@ -659,8 +441,8 @@ function Window linux_initialize_opengl(struct render_bitmap bitmap)
    typedef GLXContext opengl_function_glXCreateContextAttribsARB(Display *, GLXFBConfig, GLXContext, Bool, const int *);
    typedef       void opengl_function_glXSwapIntervalEXT(Display *, GLXDrawable, int);
 
-   DECLARE_OPENGL_FUNCTION(glXCreateContextAttribsARB);
-   DECLARE_OPENGL_FUNCTION(glXSwapIntervalEXT);
+   LINUX_DECLARE_OPENGL_FUNCTION(glXCreateContextAttribsARB);
+   LINUX_DECLARE_OPENGL_FUNCTION(glXSwapIntervalEXT);
 
    LINUX_LOAD_OPENGL_FUNCTION(glXCreateContextAttribsARB);
    LINUX_LOAD_OPENGL_FUNCTION(glXSwapIntervalEXT);
@@ -695,9 +477,7 @@ function Window linux_initialize_opengl(struct render_bitmap bitmap)
    int glx_minor_version;
    glXQueryVersion(display, &glx_major_version, &glx_minor_version);
 
-   platform_log("=====\n");
-   platform_log("Version (glX): %d.%d\n", glx_major_version, glx_minor_version);
-   platform_log("=====\n");
+   platform_log("OpenGL Version (glX): %d.%d\n", glx_major_version, glx_minor_version);
 
    // NOTE(law): Load any OpenGL function pointers that we don't expect to have
    // by default before initializing the platform-independent OpenGL code.
@@ -706,7 +486,155 @@ function Window linux_initialize_opengl(struct render_bitmap bitmap)
 #undef X
 
    // NOTE(law): Initialize the platform-independent side of OpenGL.
-   opengl_initialize();
+   platform_log("OpenGL Vendor: %s\n", glGetString(GL_VENDOR));
+   platform_log("OpenGL Renderer: %s\n", glGetString(GL_RENDERER));
+   platform_log("OpenGL Version: %s\n", glGetString(GL_VERSION));
+   platform_log("OpenGL Shading Language Version: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
+   // platform_log("OpenGL Extensions: %s\n", glGetString(GL_EXTENSIONS));
+
+   // NOTE(law): Define the vertices of the bitmap we plan to blit.
+   float vertices[] =
+   {
+      // NOTE(law): Lower triangle xy positions.
+      +1, +1,
+      +1, -1,
+      -1, -1,
+
+      // NOTE(law): Upper triangle xy positions.
+      +1, +1,
+      -1, -1,
+      -1, +1,
+
+      // NOTE(law): To flip the source bitmap vertically, just reverse the y
+      // texture coordinates.
+
+      // NOTE(law): Lower triangle texture coordinates.
+      1, 0,
+      1, 1,
+      0, 1,
+
+      // NOTE(law): Upper triangle texture coordinates.
+      1, 0,
+      0, 1,
+      0, 0,
+   };
+
+   glGenVertexArrays(1, &opengl_global_vertex_array_object);
+   glBindVertexArray(opengl_global_vertex_array_object);
+   {
+      // NOTE(law): Set up vertex position buffer object.
+      glGenBuffers(1, &opengl_global_vertex_buffer_object);
+      glBindBuffer(GL_ARRAY_BUFFER, opengl_global_vertex_buffer_object);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+      glBindBuffer(GL_ARRAY_BUFFER, opengl_global_vertex_buffer_object);
+      glEnableVertexAttribArray(0);
+      glEnableVertexAttribArray(1);
+
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+      glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, (void *)48);
+
+      // glDisableVertexAttribArray(0);
+      // glDisableVertexAttribArray(1);
+   }
+
+   // NOTE(law): Compile vertex shader.
+   const char *vertex_shader_code =
+   "#version 330 core\n"
+   "\n"
+   "layout(location = 0) in vec2 position;\n"
+   "layout(location = 1) in vec2 vertex_texture_coordinate;\n"
+   "out vec2 fragment_texture_coordinate;\n"
+   "\n"
+   "void main()\n"
+   "{\n"
+   "   gl_Position = vec4(position, 0.0f, 1.0f);\n"
+   "   fragment_texture_coordinate = vertex_texture_coordinate;\n"
+   "}\n";
+
+   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+   glShaderSource(vertex_shader, 1, &vertex_shader_code, 0);
+   glCompileShader(vertex_shader);
+
+   GLint vertex_compilation_status;
+   glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &vertex_compilation_status);
+   if(vertex_compilation_status == GL_FALSE)
+   {
+      GLchar log[LINUX_LOG_MAX_LENGTH];
+      glGetShaderInfoLog(vertex_shader, LINUX_LOG_MAX_LENGTH, 0, log);
+
+      platform_log("ERROR: Compilation error in vertex shader.\n");
+      platform_log(log);
+   }
+   assert(vertex_compilation_status == GL_TRUE);
+
+   // NOTE(law): Compile fragment shader.
+   const char *fragment_shader_code =
+   "#version 330 core\n"
+   "\n"
+   "in vec2 fragment_texture_coordinate;\n"
+   "out vec4 output_color;\n"
+   "uniform sampler2D bitmap_texture;\n"
+   "\n"
+   "void main()\n"
+   "{\n"
+   "   output_color = texture(bitmap_texture, fragment_texture_coordinate);\n"
+   "}\n";
+
+   GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+   glShaderSource(fragment_shader, 1, &fragment_shader_code, 0);
+   glCompileShader(fragment_shader);
+
+   GLint fragment_compilation_status;
+   glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &fragment_compilation_status);
+   if(fragment_compilation_status == GL_FALSE)
+   {
+      GLchar log[LINUX_LOG_MAX_LENGTH];
+      glGetShaderInfoLog(fragment_shader, LINUX_LOG_MAX_LENGTH, 0, log);
+
+      platform_log("ERROR: Compilation error in fragment shader.\n");
+      platform_log(log);
+   }
+   assert(fragment_compilation_status == GL_TRUE);
+
+   // NOTE(law): Create shader program.
+   opengl_global_shader_program = glCreateProgram();
+   glAttachShader(opengl_global_shader_program, vertex_shader);
+   glAttachShader(opengl_global_shader_program, fragment_shader);
+   glLinkProgram(opengl_global_shader_program);
+
+   GLint program_link_status;
+   glGetProgramiv(opengl_global_shader_program, GL_LINK_STATUS, &program_link_status);
+   if(program_link_status == GL_FALSE)
+   {
+      GLchar log[LINUX_LOG_MAX_LENGTH];
+      glGetProgramInfoLog(opengl_global_shader_program, LINUX_LOG_MAX_LENGTH, 0, log);
+
+      platform_log("ERROR: Linking error in shader program.\n");
+      platform_log(log);
+   }
+   assert(program_link_status == GL_TRUE);
+
+   GLint program_status;
+   glValidateProgram(opengl_global_shader_program);
+   glGetProgramiv(opengl_global_shader_program, GL_VALIDATE_STATUS, &program_status);
+   if (program_status == GL_FALSE)
+   {
+      GLchar log[LINUX_LOG_MAX_LENGTH];
+      glGetProgramInfoLog(opengl_global_shader_program, LINUX_LOG_MAX_LENGTH, 0, log);
+
+      platform_log("ERROR: The linked shader program is invalid.\n");
+      platform_log(log);
+   }
+   assert(program_status == GL_TRUE);
+
+   // NOTE(law): Clean up the shaders once the program has been created.
+   glDetachShader(opengl_global_shader_program, vertex_shader);
+   glDetachShader(opengl_global_shader_program, fragment_shader);
+
+   glDeleteShader(vertex_shader);
+   glDeleteShader(fragment_shader);
 
    return(window);
 }
@@ -716,7 +644,61 @@ function void linux_display_bitmap(Window window, struct render_bitmap bitmap)
    struct linux_window_dimensions dimensions;
    linux_get_window_dimensions(window, &dimensions);
 
-   opengl_display_bitmap(&bitmap, dimensions.width, dimensions.height);
+   u32 client_width = dimensions.width;
+   u32 client_height = dimensions.height;
+
+   float client_aspect_ratio = (float)client_width / (float)client_height;
+   float target_aspect_ratio = (float)RESOLUTION_BASE_WIDTH / (float)RESOLUTION_BASE_HEIGHT;
+
+   float target_width  = (float)client_width;
+   float target_height = (float)client_height;
+   float gutter_width  = 0;
+   float gutter_height = 0;
+
+   if(client_aspect_ratio > target_aspect_ratio)
+   {
+      // NOTE(law): The window is too wide, fill in the left and right sides
+      // with black gutters.
+      target_width = target_aspect_ratio * (float)client_height;
+      gutter_width = (client_width - target_width) / 2;
+   }
+   else if(client_aspect_ratio < target_aspect_ratio)
+   {
+      // NOTE(law): The window is too tall, fill in the top and bottom with
+      // black gutters.
+      target_height = (1.0f / target_aspect_ratio) * (float)client_width;
+      gutter_height = (client_height - target_height) / 2;
+   }
+
+   // TODO(law): Should we only set the viewport on resize events?
+   glViewport(gutter_width, gutter_height, target_width, target_height);
+
+   // NOTE(law): Clear the window to black.
+   glClearColor(0, 0, 0, 1);
+   glClear(GL_COLOR_BUFFER_BIT);
+
+   // NOTE(law): Set up the pixel bitmap as an OpenGL texture.
+   glBindTexture(GL_TEXTURE_2D, 1);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bitmap.width, bitmap.height, 0,
+                GL_BGRA_EXT, GL_UNSIGNED_BYTE, bitmap.memory);
+
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP);
+
+   glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+   glEnable(GL_TEXTURE_2D);
+
+   // NOTE(law): Draw the bitmap using the previously-defined shaders.
+   glUseProgram(opengl_global_shader_program);
+   glBindVertexArray(opengl_global_vertex_array_object);
+
+   glDrawArrays(GL_TRIANGLES, 0, 6);
+
+   glBindVertexArray(0);
+   glUseProgram(0);
 
    glXSwapBuffers(linux_global_display, window);
 }
@@ -727,102 +709,97 @@ function void linux_set_key_state(struct platform_input_button *button, bool is_
    button->is_pressed = is_pressed;
 }
 
-function bool linux_process_keyboard(Window window, XEvent event, struct game_input *input)
+function void linux_process_keyboard(Window window, XEvent event, struct game_input *input)
 {
-   bool result = true;
+   assert(event.type == KeyPress || event.type == KeyRelease);
 
-   if(event.type == KeyPress || event.type == KeyRelease)
+   XKeyEvent key_event = event.xkey;
+   // bool is_alt_pressed = (key_event.state | XK_Meta_L | XK_Meta_R);
+
+   char buffer[256];
+   KeySym keysym;
+   XLookupString(&key_event, buffer, ARRAY_LENGTH(buffer), &keysym, 0);
+
+   bool key_is_pressed = (event.type == KeyPress);
+
+   switch(keysym)
    {
-      XKeyEvent key_event = event.xkey;
-      // bool is_alt_pressed = (key_event.state | XK_Meta_L | XK_Meta_R);
-
-      char buffer[256];
-      KeySym keysym;
-      XLookupString(&key_event, buffer, ARRAY_LENGTH(buffer), &keysym, 0);
-
-      bool key_is_pressed = (event.type == KeyPress);
-
-      switch(keysym)
+      case XK_Escape:
       {
-         case XK_Escape:
-         {
-            linux_global_is_running = false;
-         } break;
+         linux_global_is_running = false;
+      } break;
 
-         case XK_Return:
-         {
-            linux_set_key_state(&input->confirm, key_is_pressed);
-         } break;
+      case XK_Return:
+      {
+         linux_set_key_state(&input->confirm, key_is_pressed);
+      } break;
 
-         case XK_p:
-         {
-            linux_set_key_state(&input->pause, key_is_pressed);
-         } break;
+      case XK_p:
+      {
+         linux_set_key_state(&input->pause, key_is_pressed);
+      } break;
 
-         case XK_q:
-         {
-            linux_set_key_state(&input->cancel, key_is_pressed);
-         } break;
+      case XK_q:
+      {
+         linux_set_key_state(&input->cancel, key_is_pressed);
+      } break;
 
-         case XK_Up:
-         case XK_w:
-         {
-            linux_set_key_state(&input->move_up, key_is_pressed);
-         } break;
+      case XK_Up:
+      case XK_w:
+      {
+         linux_set_key_state(&input->move_up, key_is_pressed);
+      } break;
 
-         case XK_Down:
-         case XK_s:
-         {
-            linux_set_key_state(&input->move_down, key_is_pressed);
-         } break;
+      case XK_Down:
+      case XK_s:
+      {
+         linux_set_key_state(&input->move_down, key_is_pressed);
+      } break;
 
-         case XK_Left:
-         case XK_a:
-         {
-            linux_set_key_state(&input->move_left, key_is_pressed);
-         } break;
+      case XK_Left:
+      case XK_a:
+      {
+         linux_set_key_state(&input->move_left, key_is_pressed);
+      } break;
 
-         case XK_Right:
-         case XK_d:
-         {
-            linux_set_key_state(&input->move_right, key_is_pressed);
-         } break;
+      case XK_Right:
+      case XK_d:
+      {
+         linux_set_key_state(&input->move_right, key_is_pressed);
+      } break;
 
-         case XK_Control_L:
-         case XK_Control_R:
-         {
-            linux_set_key_state(&input->dash, key_is_pressed);
-         } break;
+      case XK_Control_L:
+      case XK_Control_R:
+      {
+         linux_set_key_state(&input->dash, key_is_pressed);
+      } break;
 
-         case XK_Shift_L:
-         case XK_Shift_R:
-         {
-            linux_set_key_state(&input->charge, key_is_pressed);
-         } break;
+      case XK_Shift_L:
+      case XK_Shift_R:
+      {
+         linux_set_key_state(&input->charge, key_is_pressed);
+      } break;
 
-         case XK_u:
-         {
-            linux_set_key_state(&input->undo, key_is_pressed);
-         } break;
+      case XK_u:
+      {
+         linux_set_key_state(&input->undo, key_is_pressed);
+      } break;
 
-         case XK_r:
-         {
-            linux_set_key_state(&input->reload, key_is_pressed);
-         } break;
+      case XK_r:
+      {
+         linux_set_key_state(&input->reload, key_is_pressed);
+      } break;
 
-         case XK_period:
-         {
-            linux_set_key_state(&input->next, key_is_pressed);
-         } break;
+      case XK_period:
+      {
+         linux_set_key_state(&input->next, key_is_pressed);
+      } break;
 
-         case XK_comma:
-         {
-            linux_set_key_state(&input->previous, key_is_pressed);
-         } break;
-      }
+      case XK_comma:
+      {
+         linux_set_key_state(&input->previous, key_is_pressed);
+      } break;
    }
-
-   return(result);
 }
 
 function void linux_process_events(Window window, struct game_input *input)
@@ -846,11 +823,6 @@ function void linux_process_events(Window window, struct game_input *input)
             XNextEvent(display, &event);
             continue;
          }
-      }
-
-      if(linux_process_keyboard(window, event, input))
-      {
-         continue;
       }
 
       switch (event.type)
@@ -884,7 +856,7 @@ function void linux_process_events(Window window, struct game_input *input)
          case KeyPress:
          case KeyRelease:
          {
-            assert(!"Handled above.");
+            linux_process_keyboard(window, event, input);
          } break;
 
          case ButtonPress:
