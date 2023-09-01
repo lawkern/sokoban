@@ -54,14 +54,27 @@ function PLATFORM_TIMER_BEGIN(platform_timer_begin)
    global_platform_timers[id].label = label;
 
    u64 start;
+#if TARGET_CPU_ARM64
    asm volatile("mrs %0, cntvct_el0" : "=r" (start));
+#elif TARGET_CPU_X86_64
+   start = __rdtsc();
+#else
+   #error Unsupported target CPU.
+#endif
+
    global_platform_timers[id].start = start;
 }
 
 function PLATFORM_TIMER_END(platform_timer_end)
 {
    u64 end;
+#if TARGET_CPU_ARM64
    asm volatile("mrs %0, cntvct_el0" : "=r" (end));
+#elif TARGET_CPU_X86_64
+   end = __rdtsc();
+#else
+   #error Unsupported target CPU.
+#endif
 
    global_platform_timers[id].elapsed += (end - global_platform_timers[id].start);
    global_platform_timers[id].hits++;
@@ -699,6 +712,8 @@ int main(int argument_count, char **arguments)
       macos_global_is_running = true;
       while(macos_global_is_running)
       {
+         RESET_TIMERS();
+
          // TODO(law): Will clearing just the state changes result in stuck keys
          // if an NSKeyDown or NSKeyUp event is somehow missed?
          for(u32 index = 0; index < ARRAY_LENGTH(input.buttons); ++index)
@@ -750,6 +765,8 @@ int main(int argument_count, char **arguments)
          static u32 frame_count;
          if((frame_count++ % 30) == 0)
          {
+            print_timers(frame_count);
+
             float frame_ms = frame_seconds_elapsed * 1000.0f;
             u32 sleep_ms = sleep_us / 1000;
 

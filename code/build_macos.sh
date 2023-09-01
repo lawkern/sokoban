@@ -36,7 +36,10 @@ pushd ../build > /dev/null
 # xcrun -sdk macosx metallib sokoban.air -o sokoban.metallib
 
 # Executable compilation:
-clang ../code/platform_macos.m $COMPILER_FLAGS -o sokoban $LINKER_FLAGS
+clang ../code/platform_macos.m $COMPILER_FLAGS -target arm64-apple-macos11     -o sokoban_arm $LINKER_FLAGS
+clang ../code/platform_macos.m $COMPILER_FLAGS -target x86_64-apple-macos10.12 -o sokoban_x64 $LINKER_FLAGS
+
+lipo -create -output sokoban sokoban_arm sokoban_x64
 
 # TODO(law): Generate the standard macOS application bundle.
 
