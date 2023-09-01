@@ -15,13 +15,13 @@ typedef uint32x4_t u32_4x;
 #   define u32_4x_srli(v, n) vshrq_n_u32((v), (n))
 #   define u32_4x_loadu(p) vld1q_u32((u32 *)(p))
 #   define u32_4x_storeu(p, v) vst1q_u32((u32 *)(p), (v))
-#   define u32_4x_convert_f32_4x(v) vcvtq_f32_u32(v)
+#   define u32_4x_convert_f32_4x(v) vcvtq_u32_f32(v)
 
 #   define f32_4x_set1(v) {(v), (v), (v), (v)}
 #   define f32_4x_add(a, b) vaddq_f32((a), (b))
 #   define f32_4x_sub(a, b) vsubq_f32((a), (b))
 #   define f32_4x_mul(a, b) vmulq_f32((a), (b))
-#   define f32_4x_convert_u32_4x(v) vcvtq_u32_f32(v)
+#   define f32_4x_convert_u32_4x(v) vcvtq_f32_u32(v)
 
 #else
 #   include <immintrin.h>
