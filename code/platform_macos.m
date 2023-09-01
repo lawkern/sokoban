@@ -462,6 +462,15 @@ function bool macos_process_keyboard(NSEvent *event, struct game_input *input)
             macos_set_key_state(&input->reload, key_is_pressed);
          } break;
 
+         case kVK_ANSI_F:
+         {
+            if(key_is_pressed)
+            {
+               NSWindow *window = [event window];
+               [window toggleFullScreen:window];
+            }
+         } break;
+
          case kVK_ANSI_Period:
          {
             macos_set_key_state(&input->next, key_is_pressed);
@@ -470,14 +479,6 @@ function bool macos_process_keyboard(NSEvent *event, struct game_input *input)
          case kVK_ANSI_Comma:
          {
             macos_set_key_state(&input->previous, key_is_pressed);
-         } break;
-
-         case 'F':
-         {
-            // if(key_is_pressed && key_changed_state)
-            // {
-            //    macos_toggle_fullscreen();
-            // }
          } break;
       }
 
