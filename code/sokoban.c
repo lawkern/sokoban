@@ -722,7 +722,7 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
       for(s32 x = 0; x < destination.width; x += 4)
       {
          // TODO(law): Align memory to 16-byte boundary so we don't need unaligned stores.
-         u32_4x_storeu((u32_4x *)(row + x), wide_color);
+         u32_4x_storeu((row + x), wide_color);
       }
    }
 
@@ -734,14 +734,6 @@ typedef struct
    float x;
    float y;
 } v2;
-
-function v2 add2(v2 a, v2 b)
-{
-   a.x += b.x;
-   a.y += b.y;
-
-   return(a);
-}
 
 function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 max, u32 color)
 {
