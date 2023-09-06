@@ -633,6 +633,15 @@ int main(int argument_count, char **arguments)
       NSApplication *app = [NSApplication sharedApplication];
       [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
+#if DEVELOPMENT_BUILD
+      // TODO(law): We're using `activateIgnoringOtherApps` to prevent the game
+      // window from being sorted behind the terminal window when started from
+      // the command line. It's unclear if this is necessary/desireable for the
+      // final build.
+
+      [NSApp activateIgnoringOtherApps:YES];
+#endif
+
       MacosAppDelegate *app_delegate = [[MacosAppDelegate alloc] init];
       [app setDelegate:app_delegate];
 
