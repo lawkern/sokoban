@@ -13,11 +13,13 @@ typedef HANDLE platform_semaphore;
 #define WIN32_DEFAULT_DPI 96
 #define WIN32_WORKER_THREAD_COUNT 8
 
+// NOTE(law): Defined in sokoban.rc resource file:
+#define WIN32_ICON MAKEINTRESOURCE(201)
+
 #define WIN32_SECONDS_ELAPSED(start, end) ((float)((end).QuadPart - (start).QuadPart) / \
                                            (float)win32_global_counts_per_second.QuadPart)
 
 global LARGE_INTEGER win32_global_counts_per_second;
-global int win32_global_dpi = WIN32_DEFAULT_DPI;
 global bool win32_global_is_running;
 global BITMAPINFO *win32_global_bitmap_info;
 global struct render_bitmap *win32_global_bitmap;
@@ -25,6 +27,10 @@ global WINDOWPLACEMENT win32_global_previous_window_placement =
 {
    sizeof(win32_global_previous_window_placement)
 };
+
+global int win32_global_dpi = WIN32_DEFAULT_DPI;
+global HANDLE win32_global_small_icon16;
+global HANDLE win32_global_small_icon24;
 
 #if DEVELOPMENT_BUILD
 function PLATFORM_TIMER_BEGIN(platform_timer_begin)
@@ -368,6 +374,18 @@ LRESULT win32_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM l
          // Determine DPI:
          win32_global_dpi = win32_get_window_dpi(window);
 
+         // Create window icons and set based on DPI:
+         win32_global_small_icon16 = LoadImage(GetModuleHandle(0), WIN32_ICON, IMAGE_ICON, 16, 16, 0);
+         win32_global_small_icon24 = LoadImage(GetModuleHandle(0), WIN32_ICON, IMAGE_ICON, 24, 24, 0);
+         if(win32_global_dpi > WIN32_DEFAULT_DPI)
+         {
+            SendMessage(window, WM_SETICON, ICON_SMALL, (LPARAM)win32_global_small_icon24);
+         }
+         else
+         {
+            SendMessage(window, WM_SETICON, ICON_SMALL, (LPARAM)win32_global_small_icon16);
+         }
+
          // Set window size:
          if(!win32_is_fullscreen(window))
          {
@@ -407,6 +425,15 @@ LRESULT win32_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM l
          int height = updated_window->bottom - updated_window->top;
 
          SetWindowPos(window, 0, x, y, width, height, SWP_NOZORDER|SWP_NOACTIVATE);
+
+         if(win32_global_dpi > WIN32_DEFAULT_DPI)
+         {
+            SendMessage(window, WM_SETICON, ICON_SMALL, (LPARAM)win32_global_small_icon24);
+         }
+         else
+         {
+            SendMessage(window, WM_SETICON, ICON_SMALL, (LPARAM)win32_global_small_icon16);
+         }
       } break;
 
       case WM_PAINT:
@@ -604,7 +631,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    window_class.style = CS_HREDRAW|CS_VREDRAW;
    window_class.lpfnWndProc = win32_window_callback;
    window_class.hInstance = instance;
-   window_class.hIcon = LoadIcon(0, IDI_APPLICATION);
+   window_class.hIcon = LoadImage(instance, WIN32_ICON, IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
    window_class.hCursor = LoadCursor(0, IDC_ARROW);
    window_class.lpszClassName = TEXT("Sokoban");
 

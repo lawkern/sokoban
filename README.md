@@ -2,10 +2,10 @@ Sokoban
 =======
 
 A lightweight, minimal dependency implementation of the puzzle game
-Sokoban. Includes native ports for Windows, Linux (X11), and macOS (both
-Intel and Apple Silicon).
+Sokoban. Includes native ports for Windows, Linux (X11), and macOS (Intel and
+Apple Silicon).
 
-![Screenshot of a level](data/screenshots/skull.png)
+![Screenshot of a level](data/screenshots/empty_section.png)
 
 
 Build Instructions
