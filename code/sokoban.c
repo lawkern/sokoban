@@ -223,48 +223,77 @@ struct bitmap_header
 };
 #pragma pack(pop)
 
-function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file_path)
+function struct render_bitmap generate_null_bitmap(struct memory_arena *arena)
 {
    struct render_bitmap result = {0};
 
-   struct platform_file file = platform_load_file(file_path);
-   struct bitmap_header *header = (struct bitmap_header *)file.memory;
-
-   assert(header->file_type == 0x4D42); // "BM"
-   assert(header->bits_per_pixel == 32);
-
-   result.width = header->width;
-   result.height = header->height;
+   result.width = TILE_DIMENSION_PIXELS;
+   result.height = TILE_DIMENSION_PIXELS;
    result.memory = allocate(arena, sizeof(u32) * result.width * result.height);
-
-   u32 *source_memory = (u32 *)(file.memory + header->bitmap_offset);
-   u32 *row = source_memory + (result.width * (result.height - 1));
 
    for(s32 y = 0; y < result.height; ++y)
    {
       for(s32 x = 0; x < result.width; ++x)
       {
-         u32 color = *(row + x);
-         float r = (float)((color >> 16) & 0xFF);
-         float g = (float)((color >>  8) & 0xFF);
-         float b = (float)((color >>  0) & 0xFF);
-         float a = (float)((color >> 24) & 0xFF);
-
-         float anormal = a / 255.0f;
-         r *= anormal;
-         g *= anormal;
-         b *= anormal;
-
-         result.memory[(y * result.width) + x] = (((u32)(r + 0.5f) << 16) |
-                                                  ((u32)(g + 0.5f) << 8) |
-                                                  ((u32)(b + 0.5f) << 0) |
-                                                  ((u32)(a + 0.5f) << 24));
+         result.memory[(y * result.width) + x] = 0xFFFF00FF;
       }
-
-      row -= result.width;
    }
 
-   platform_free_file(&file);
+   return(result);
+}
+
+function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file_path)
+{
+   struct render_bitmap result = {0};
+
+   struct platform_file file = platform_load_file(file_path);
+   if(file.size > 0)
+   {
+      struct bitmap_header *header = (struct bitmap_header *)file.memory;
+
+      assert(header->file_type == 0x4D42); // "BM"
+      assert(header->bits_per_pixel == 32);
+
+      result.width = header->width;
+      result.height = header->height;
+      result.memory = allocate(arena, sizeof(u32) * result.width * result.height);
+
+      u32 *source_memory = (u32 *)(file.memory + header->bitmap_offset);
+      u32 *row = source_memory + (result.width * (result.height - 1));
+
+      for(s32 y = 0; y < result.height; ++y)
+      {
+         for(s32 x = 0; x < result.width; ++x)
+         {
+            u32 color = *(row + x);
+            float r = (float)((color >> 16) & 0xFF);
+            float g = (float)((color >>  8) & 0xFF);
+            float b = (float)((color >>  0) & 0xFF);
+            float a = (float)((color >> 24) & 0xFF);
+
+            float anormal = a / 255.0f;
+            r *= anormal;
+            g *= anormal;
+            b *= anormal;
+
+            result.memory[(y * result.width) + x] = (((u32)(r + 0.5f) << 16) |
+                                                     ((u32)(g + 0.5f) << 8) |
+                                                     ((u32)(b + 0.5f) << 0) |
+                                                     ((u32)(a + 0.5f) << 24));
+         }
+
+         row -= result.width;
+      }
+
+      platform_free_file(&file);
+   }
+   else
+   {
+      // NOTE(law): In the case where a particular bitmap isn't found, use a
+      // dummy bitmap in its place.
+
+      result = generate_null_bitmap(arena);
+   }
 
    return(result);
 }
@@ -1316,22 +1345,22 @@ function GAME_UPDATE(game_update)
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/chunky.sok");
       load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
 
-      gs->floor[0] = load_bitmap(&gs->arena, "../data/floor00.bmp");
-      gs->floor[1] = load_bitmap(&gs->arena, "../data/floor01.bmp");
-      gs->floor[2] = load_bitmap(&gs->arena, "../data/floor02.bmp");
-      gs->floor[3] = load_bitmap(&gs->arena, "../data/floor03.bmp");
+      gs->floor[0] = load_bitmap(&gs->arena, "../data/artwork/floor00.bmp");
+      gs->floor[1] = load_bitmap(&gs->arena, "../data/artwork/floor01.bmp");
+      gs->floor[2] = load_bitmap(&gs->arena, "../data/artwork/floor02.bmp");
+      gs->floor[3] = load_bitmap(&gs->arena, "../data/artwork/floor03.bmp");
 
-      gs->wall[WALL_TYPE_INTERIOR]  = load_bitmap(&gs->arena, "../data/wall.bmp");
-      gs->wall[WALL_TYPE_CORNER_NW] = load_bitmap(&gs->arena, "../data/wall_nw.bmp");
-      gs->wall[WALL_TYPE_CORNER_NE] = load_bitmap(&gs->arena, "../data/wall_ne.bmp");
-      gs->wall[WALL_TYPE_CORNER_SE] = load_bitmap(&gs->arena, "../data/wall_se.bmp");
-      gs->wall[WALL_TYPE_CORNER_SW] = load_bitmap(&gs->arena, "../data/wall_sw.bmp");
+      gs->wall[WALL_TYPE_INTERIOR]  = load_bitmap(&gs->arena, "../data/artwork/wall.bmp");
+      gs->wall[WALL_TYPE_CORNER_NW] = load_bitmap(&gs->arena, "../data/artwork/wall_nw.bmp");
+      gs->wall[WALL_TYPE_CORNER_NE] = load_bitmap(&gs->arena, "../data/artwork/wall_ne.bmp");
+      gs->wall[WALL_TYPE_CORNER_SE] = load_bitmap(&gs->arena, "../data/artwork/wall_se.bmp");
+      gs->wall[WALL_TYPE_CORNER_SW] = load_bitmap(&gs->arena, "../data/artwork/wall_sw.bmp");
 
-      gs->player         = load_bitmap(&gs->arena, "../data/player.bmp");
-      gs->player_on_goal = load_bitmap(&gs->arena, "../data/player_on_goal.bmp");
-      gs->box            = load_bitmap(&gs->arena, "../data/box.bmp");
-      gs->box_on_goal    = load_bitmap(&gs->arena, "../data/box_on_goal.bmp");
-      gs->goal           = load_bitmap(&gs->arena, "../data/goal.bmp");
+      gs->player         = load_bitmap(&gs->arena, "../data/artwork/player.bmp");
+      gs->player_on_goal = load_bitmap(&gs->arena, "../data/artwork/player_on_goal.bmp");
+      gs->box            = load_bitmap(&gs->arena, "../data/artwork/box.bmp");
+      gs->box_on_goal    = load_bitmap(&gs->arena, "../data/artwork/box_on_goal.bmp");
+      gs->goal           = load_bitmap(&gs->arena, "../data/artwork/goal.bmp");
 
       gs->player_movement.seconds_duration = 0.0666666f;
       gs->level_transition.seconds_duration = 0.333333f;
