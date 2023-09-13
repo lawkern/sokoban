@@ -156,6 +156,27 @@ struct animation_timer
    float seconds_duration;
 };
 
+enum floor_type
+{
+   FLOOR_TYPE_00,
+   FLOOR_TYPE_01,
+   FLOOR_TYPE_02,
+   FLOOR_TYPE_03,
+
+   FLOOR_TYPE_COUNT,
+};
+
+enum wall_type
+{
+   WALL_TYPE_INTERIOR,
+   WALL_TYPE_CORNER_NW,
+   WALL_TYPE_CORNER_NE,
+   WALL_TYPE_CORNER_SE,
+   WALL_TYPE_CORNER_SW,
+
+   WALL_TYPE_COUNT,
+};
+
 struct game_state
 {
    struct memory_arena arena;
@@ -171,8 +192,8 @@ struct game_state
    struct render_bitmap player_on_goal;
    struct render_bitmap box;
    struct render_bitmap box_on_goal;
-   struct render_bitmap floor[4];
-   struct render_bitmap wall[5];
+   struct render_bitmap floor[FLOOR_TYPE_COUNT];
+   struct render_bitmap wall[WALL_TYPE_COUNT];
    struct render_bitmap goal;
 
    union
@@ -346,15 +367,6 @@ function bool is_tile_position_in_bounds(u32 x, u32 y)
    return(result);
 }
 
-enum wall_type
-{
-   WALL_TYPE_INTERIOR,
-   WALL_TYPE_CORNER_NW,
-   WALL_TYPE_CORNER_NE,
-   WALL_TYPE_CORNER_SE,
-   WALL_TYPE_CORNER_SW,
-};
-
 function enum wall_type get_wall_type(struct tile_map_state *map, u32 x, u32 y)
 {
    enum wall_type result = WALL_TYPE_INTERIOR;
@@ -418,13 +430,13 @@ function bool is_tile_character(char c)
    return(result);
 }
 
-function void load_level(struct game_state *gs, struct game_level *level, char *file_path)
+function bool load_level(struct game_level *level, char *file_path, struct random_entropy *entropy)
 {
+   // NOTE(law): Return whether a valid level was successfully loaded.
+   bool result = false;
+
    // NOTE(law): Clear level contents.
    zero_memory(level, sizeof(*level));
-
-   u32 level_width = 0;
-   u32 level_height = 0;
 
    u8 tile_characters[SCREEN_TILE_COUNT_X * SCREEN_TILE_COUNT_Y];
    for(u32 index = 0; index < ARRAY_LENGTH(tile_characters); ++index)
@@ -443,20 +455,24 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
    }
    assert(level->name);
 
+   u32 level_width = 0;
+   u32 level_height = 0;
+
    struct platform_file level_file = platform_load_file(level->file_path);
+   if(level_file.size > 0)
    {
       // NOTE(law): Calculate width and height of level.
-      u32 x = 0;
+      u32 offsetx = 0;
       size_t byte_index = 0;
       while(byte_index < level_file.size)
       {
          u8 tile = level_file.memory[byte_index++];
          if(is_tile_character(tile))
          {
-            tile_characters[(level_height * SCREEN_TILE_COUNT_X) + x++] = tile;
-            if(x > level_width)
+            tile_characters[(level_height * SCREEN_TILE_COUNT_X) + offsetx++] = tile;
+            if(offsetx > level_width)
             {
-               level_width = x;
+               level_width = offsetx;
             }
          }
          else if(tile == '\n')
@@ -465,64 +481,85 @@ function void load_level(struct game_state *gs, struct game_level *level, char *
             // the case where the level file does not include a trailing
             // newline. Automatic newline insertion?
 
-            x = 0;
+            offsetx = 0;
             level_height++;
          }
       }
-   }
-   platform_free_file(&level_file);
+      platform_free_file(&level_file);
 
-   // NOTE(law): Offset tiles so the level is centered based on its size.
-   u32 minx = (SCREEN_TILE_COUNT_X - level_width) / 2;
-   u32 miny = (SCREEN_TILE_COUNT_Y - level_height) / 2;
-
-   u32 maxx = minx + level_width - 1;
-   u32 maxy = miny + level_height - 1;
-
-   for(u32 y = miny; y <= maxy; ++y)
-   {
-      for(u32 x = minx; x <= maxx; ++x)
+      if(level_width > 0 && level_height > 0)
       {
-         u32 sourcex = x - minx;
-         u32 sourcey = y - miny;
+         // NOTE(law): Offset tiles so the level is centered based on its size.
+         u32 minx = (SCREEN_TILE_COUNT_X - level_width) / 2;
+         u32 miny = (SCREEN_TILE_COUNT_Y - level_height) / 2;
 
-         u8 tile = tile_characters[(sourcey * SCREEN_TILE_COUNT_X) + sourcex];
-         assert(is_tile_character(tile));
+         u32 maxx = minx + level_width - 1;
+         u32 maxy = miny + level_height - 1;
 
-         switch(tile)
+         for(u32 y = miny; y <= maxy; ++y)
          {
-            case '@': {level->map.tiles[y][x] = TILE_TYPE_PLAYER;} break;
-            case '+': {level->map.tiles[y][x] = TILE_TYPE_PLAYER_ON_GOAL;} break;
-            case '$': {level->map.tiles[y][x] = TILE_TYPE_BOX;} break;
-            case '*': {level->map.tiles[y][x] = TILE_TYPE_BOX_ON_GOAL;} break;
-            case '#': {level->map.tiles[y][x] = TILE_TYPE_WALL;} break;
-            case '.': {level->map.tiles[y][x] = TILE_TYPE_GOAL;} break;
-            case ' ': {level->map.tiles[y][x] = TILE_TYPE_FLOOR;} break;
-            default:  {assert(!"Unhandled character in level file.");} break;
+            for(u32 x = minx; x <= maxx; ++x)
+            {
+               u32 sourcex = x - minx;
+               u32 sourcey = y - miny;
+
+               u8 tile = tile_characters[(sourcey * SCREEN_TILE_COUNT_X) + sourcex];
+               assert(is_tile_character(tile));
+
+               switch(tile)
+               {
+                  case '@': {level->map.tiles[y][x] = TILE_TYPE_PLAYER;} break;
+                  case '+': {level->map.tiles[y][x] = TILE_TYPE_PLAYER_ON_GOAL;} break;
+                  case '$': {level->map.tiles[y][x] = TILE_TYPE_BOX;} break;
+                  case '*': {level->map.tiles[y][x] = TILE_TYPE_BOX_ON_GOAL;} break;
+                  case '#': {level->map.tiles[y][x] = TILE_TYPE_WALL;} break;
+                  case '.': {level->map.tiles[y][x] = TILE_TYPE_GOAL;} break;
+                  case ' ': {level->map.tiles[y][x] = TILE_TYPE_FLOOR;} break;
+                  default:  {assert(!"Unhandled character in level file.");} break;
+               }
+
+               enum tile_type type = level->map.tiles[y][x];
+               if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
+               {
+                  level->map.player_tilex = x;
+                  level->map.player_tiley = y;
+               }
+            }
          }
 
-         enum tile_type type = level->map.tiles[y][x];
-         if(type == TILE_TYPE_PLAYER || type == TILE_TYPE_PLAYER_ON_GOAL)
+         // NOTE(law): Handle any post-processing after tiles are read into memory.
+         for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
          {
-            level->map.player_tilex = x;
-            level->map.player_tiley = y;
+            for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
+            {
+               struct tile_attributes *attributes = level->attributes[y] + x;
+               attributes->floor_index = random_range(entropy, 0, FLOOR_TYPE_COUNT - 1);
+
+               if(level->map.tiles[y][x] == TILE_TYPE_WALL)
+               {
+                  attributes->wall_index = get_wall_type(&level->map, x, y);
+               }
+            }
          }
+
+         result = true;
       }
    }
 
-   // NOTE(law): Handle any post-processing after tiles are read into memory.
-   for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
-   {
-      for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
-      {
-         struct tile_attributes *attributes = level->attributes[y] + x;
-         attributes->floor_index = random_range(&gs->entropy, 0, ARRAY_LENGTH(gs->floor) - 1);
+   return(result);
+}
 
-         if(level->map.tiles[y][x] == TILE_TYPE_WALL)
-         {
-            attributes->wall_index = get_wall_type(&level->map, x, y);
-         }
-      }
+
+function void store_level(struct game_state *gs, char *path)
+{
+   assert(gs->level_count < ARRAY_LENGTH(gs->levels));
+
+   // NOTE(law): Load a level from disk, storing it in game state only if it is
+   // determined to be valid.
+
+   if(load_level(gs->levels[gs->level_count], path, &gs->entropy))
+   {
+      gs->level_count++;
    }
 }
 
@@ -1111,7 +1148,7 @@ function struct game_level *set_level(struct game_state *gs, struct render_bitma
    // animation state.
 
    // NOTE(law): Load the specified level.
-   load_level(gs, level, level->file_path);
+   load_level(level, level->file_path, &gs->entropy);
 
    return(level);
 }
@@ -1339,16 +1376,16 @@ function GAME_UPDATE(game_update)
 
       load_font(&gs->font, &gs->arena, "../data/atari.font");
 
-      load_level(gs, gs->levels[gs->level_count++], "../data/levels/simple.sok");
-      load_level(gs, gs->levels[gs->level_count++], "../data/levels/skull.sok");
-      load_level(gs, gs->levels[gs->level_count++], "../data/levels/snake.sok");
-      load_level(gs, gs->levels[gs->level_count++], "../data/levels/chunky.sok");
-      load_level(gs, gs->levels[gs->level_count++], "../data/levels/empty_section.sok");
+      store_level(gs, "../data/levels/simple.sok");
+      store_level(gs, "../data/levels/skull.sok");
+      store_level(gs, "../data/levels/snake.sok");
+      store_level(gs, "../data/levels/chunky.sok");
+      store_level(gs, "../data/levels/empty_section.sok");
 
-      gs->floor[0] = load_bitmap(&gs->arena, "../data/artwork/floor00.bmp");
-      gs->floor[1] = load_bitmap(&gs->arena, "../data/artwork/floor01.bmp");
-      gs->floor[2] = load_bitmap(&gs->arena, "../data/artwork/floor02.bmp");
-      gs->floor[3] = load_bitmap(&gs->arena, "../data/artwork/floor03.bmp");
+      gs->floor[FLOOR_TYPE_00] = load_bitmap(&gs->arena, "../data/artwork/floor00.bmp");
+      gs->floor[FLOOR_TYPE_01] = load_bitmap(&gs->arena, "../data/artwork/floor01.bmp");
+      gs->floor[FLOOR_TYPE_02] = load_bitmap(&gs->arena, "../data/artwork/floor02.bmp");
+      gs->floor[FLOOR_TYPE_03] = load_bitmap(&gs->arena, "../data/artwork/floor03.bmp");
 
       gs->wall[WALL_TYPE_INTERIOR]  = load_bitmap(&gs->arena, "../data/artwork/wall.bmp");
       gs->wall[WALL_TYPE_CORNER_NW] = load_bitmap(&gs->arena, "../data/artwork/wall_nw.bmp");
