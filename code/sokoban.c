@@ -118,10 +118,6 @@ struct game_level
 
    u32 move_count;
    u32 push_count;
-
-   u32 undo_index;
-   u32 undo_count;
-   struct tile_map_state undos[256];
 };
 
 struct movement_result
@@ -188,6 +184,10 @@ struct game_state
    u32 level_count;
    struct game_level *levels[64];
 
+   u32 undo_index;
+   u32 undo_count;
+   struct tile_map_state undos[256];
+
    struct render_bitmap player;
    struct render_bitmap player_on_goal;
    struct render_bitmap box;
@@ -244,12 +244,9 @@ struct bitmap_header
 };
 #pragma pack(pop)
 
-function struct render_bitmap generate_null_bitmap(struct memory_arena *arena)
+function struct render_bitmap generate_null_bitmap(struct memory_arena *arena, u32 width, u32 height)
 {
-   struct render_bitmap result = {0};
-
-   result.width = TILE_DIMENSION_PIXELS;
-   result.height = TILE_DIMENSION_PIXELS;
+   struct render_bitmap result = {width, height};
    result.memory = allocate(arena, sizeof(u32) * result.width * result.height);
 
    for(s32 y = 0; y < result.height; ++y)
@@ -261,6 +258,11 @@ function struct render_bitmap generate_null_bitmap(struct memory_arena *arena)
    }
 
    return(result);
+}
+
+function struct render_bitmap generate_null_tile(struct memory_arena *arena)
+{
+   return generate_null_bitmap(arena, TILE_DIMENSION_PIXELS, TILE_DIMENSION_PIXELS);
 }
 
 function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file_path)
@@ -313,7 +315,7 @@ function struct render_bitmap load_bitmap(struct memory_arena *arena, char *file
       // NOTE(law): In the case where a particular bitmap isn't found, use a
       // dummy bitmap in its place.
 
-      result = generate_null_bitmap(arena);
+      result = generate_null_tile(arena);
    }
 
    return(result);
@@ -430,13 +432,17 @@ function bool is_tile_character(char c)
    return(result);
 }
 
-function bool load_level(struct game_level *level, char *file_path, struct random_entropy *entropy)
+function bool load_level(struct game_state *gs, struct game_level *level, char *file_path)
 {
    // NOTE(law): Return whether a valid level was successfully loaded.
    bool result = false;
 
    // NOTE(law): Clear level contents.
    zero_memory(level, sizeof(*level));
+
+   // NOTE(law): Clear undo information
+   gs->undo_index = 0;
+   gs->undo_count = 0;
 
    u8 tile_characters[SCREEN_TILE_COUNT_X * SCREEN_TILE_COUNT_Y];
    for(u32 index = 0; index < ARRAY_LENGTH(tile_characters); ++index)
@@ -528,6 +534,8 @@ function bool load_level(struct game_level *level, char *file_path, struct rando
          }
 
          // NOTE(law): Handle any post-processing after tiles are read into memory.
+         struct random_entropy *entropy = &gs->entropy;
+
          for(u32 y = 0; y < SCREEN_TILE_COUNT_Y; ++y)
          {
             for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
@@ -557,18 +565,20 @@ function void store_level(struct game_state *gs, char *path)
    // NOTE(law): Load a level from disk, storing it in game state only if it is
    // determined to be valid.
 
-   if(load_level(gs->levels[gs->level_count], path, &gs->entropy))
+   if(load_level(gs, gs->levels[gs->level_count], path))
    {
       gs->level_count++;
    }
 }
 
-function void push_undo(struct game_level *level)
+function void push_undo(struct game_state *gs)
 {
-   level->undo_index = (level->undo_index + 1) % ARRAY_LENGTH(level->undos);
-   level->undo_count = MINIMUM(level->undo_count + 1, ARRAY_LENGTH(level->undos));
+   gs->undo_index = (gs->undo_index + 1) % ARRAY_LENGTH(gs->undos);
+   gs->undo_count = MINIMUM(gs->undo_count + 1, ARRAY_LENGTH(gs->undos));
 
-   struct tile_map_state *undo = level->undos + level->undo_index;
+   struct tile_map_state *undo = gs->undos + gs->undo_index;
+   struct game_level *level = gs->levels[gs->level_index];
+
    undo->player_tilex = level->map.player_tilex;
    undo->player_tiley = level->map.player_tiley;
    undo->push_count = level->push_count;
@@ -582,11 +592,13 @@ function void push_undo(struct game_level *level)
    }
 }
 
-function void pop_undo(struct game_level *level)
+function void pop_undo(struct game_state *gs)
 {
-   if(level->undo_count > 0)
+   if(gs->undo_count > 0)
    {
-      struct tile_map_state *undo = level->undos + level->undo_index;
+      struct tile_map_state *undo = gs->undos + gs->undo_index;
+      struct game_level *level = gs->levels[gs->level_index];
+
       level->map.player_tilex = undo->player_tilex;
       level->map.player_tiley = undo->player_tiley;
 
@@ -598,8 +610,9 @@ function void pop_undo(struct game_level *level)
          }
       }
 
-      level->undo_index = (level->undo_index > 0) ? (level->undo_index - 1) : ARRAY_LENGTH(level->undos) - 1;
-      level->undo_count--;
+      gs->undo_index = (gs->undo_index > 0) ? (gs->undo_index - 1) : ARRAY_LENGTH(gs->undos) - 1;
+      gs->undo_count--;
+
       level->move_count--;
       level->push_count = undo->push_count;
    }
@@ -620,12 +633,13 @@ enum player_movement
    PLAYER_MOVEMENT_CHARGE,
 };
 
-function struct movement_result move_player(struct game_level *level, enum player_direction direction, enum player_movement movement)
+function struct movement_result move_player(struct game_state *gs, enum player_direction direction, enum player_movement movement)
 {
    // TODO(law): This whole thing can be pared down considerably.
 
    struct movement_result result = {0};
 
+   struct game_level *level = gs->levels[gs->level_index];
    result.initial_player_tilex = result.final_player_tilex = level->map.player_tilex;
    result.initial_player_tiley = result.final_player_tiley = level->map.player_tiley;
 
@@ -679,7 +693,7 @@ function struct movement_result move_player(struct game_level *level, enum playe
             // NOTE(law): If the player destination tile is unoccupied, move
             // directly there while accounting for goal vs. floor tiles.
 
-            push_undo(level);
+            push_undo(gs);
 
             level->map.player_tilex = px;
             level->map.player_tiley = py;
@@ -724,7 +738,7 @@ function struct movement_result move_player(struct game_level *level, enum playe
                      {
                         level->push_count++;
                      }
-                     push_undo(level);
+                     push_undo(gs);
 
                      level->map.player_tilex = px;
                      level->map.player_tiley = py;
@@ -1148,7 +1162,7 @@ function struct game_level *set_level(struct game_state *gs, struct render_bitma
    // animation state.
 
    // NOTE(law): Load the specified level.
-   load_level(level, level->file_path, &gs->entropy);
+   load_level(gs, level, level->file_path);
 
    return(level);
 }
@@ -1363,25 +1377,29 @@ function GAME_UPDATE(game_update)
    struct game_state *gs = (struct game_state *)memory.base_address;
    if(!gs->is_initialized)
    {
-      gs->entropy = random_seed(0x1234);
-
+      // NOTE(law): Create memory arena directly after game_state struct in memory.
       gs->arena.size = 256 * 1024 * 1024;
       gs->arena.base_address = memory.base_address + sizeof(struct game_state);
       assert(gs->arena.size <= (memory.size + sizeof(struct game_state)));
 
+      // NOTE(law): Seed our random entropy.
+      gs->entropy = random_seed(0x1234);
+
+      // NOTE(law): Load any fonts we need.
+      load_font(&gs->font, &gs->arena, "../data/atari.font");
+
+      // NOTE(law): Allocate, load, and store levels.
       for(u32 index = 0; index < ARRAY_LENGTH(gs->levels); ++index)
       {
          gs->levels[index] = ALLOCATE_TYPE(&gs->arena, struct game_level);
       }
-
-      load_font(&gs->font, &gs->arena, "../data/atari.font");
-
       store_level(gs, "../data/levels/simple.sok");
       store_level(gs, "../data/levels/skull.sok");
       store_level(gs, "../data/levels/snake.sok");
       store_level(gs, "../data/levels/chunky.sok");
       store_level(gs, "../data/levels/empty_section.sok");
 
+      // NOTE(law): Load bitmap assets.
       gs->floor[FLOOR_TYPE_00] = load_bitmap(&gs->arena, "../data/artwork/floor00.bmp");
       gs->floor[FLOOR_TYPE_01] = load_bitmap(&gs->arena, "../data/artwork/floor01.bmp");
       gs->floor[FLOOR_TYPE_02] = load_bitmap(&gs->arena, "../data/artwork/floor02.bmp");
@@ -1399,17 +1417,19 @@ function GAME_UPDATE(game_update)
       gs->box_on_goal    = load_bitmap(&gs->arena, "../data/artwork/box_on_goal.bmp");
       gs->goal           = load_bitmap(&gs->arena, "../data/artwork/goal.bmp");
 
+      // NOTE(law): Set animation lengths.
       gs->player_movement.seconds_duration = 0.0666666f;
       gs->level_transition.seconds_duration = 0.333333f;
 
-      size_t bitmap_size = render_output.width * render_output.height * sizeof(u32);
-
+      // NOTE(law): Allocate snapshot bitmap for fadeouts.
       gs->snapshot.width  = render_output.width;
       gs->snapshot.height = render_output.height;
-      gs->snapshot.memory = ALLOCATE_SIZE(&gs->arena, bitmap_size);
+      gs->snapshot.memory = ALLOCATE_SIZE(&gs->arena, gs->snapshot.width * gs->snapshot.height * sizeof(u32));
 
+      // NOTE(law): Set the initial menu state.
       gs->menu_state = MENU_STATE_TITLE;
 
+      // NOTE(law): Add any required initialization above this point.
       gs->is_initialized = true;
    }
 
@@ -1456,19 +1476,19 @@ function GAME_UPDATE(game_update)
 
          if(was_pressed(input->move_up))
          {
-            gs->movement = move_player(level, PLAYER_DIRECTION_UP, movement);
+            gs->movement = move_player(gs, PLAYER_DIRECTION_UP, movement);
          }
          else if(was_pressed(input->move_down))
          {
-            gs->movement = move_player(level, PLAYER_DIRECTION_DOWN, movement);
+            gs->movement = move_player(gs, PLAYER_DIRECTION_DOWN, movement);
          }
          else if(was_pressed(input->move_left))
          {
-            gs->movement = move_player(level, PLAYER_DIRECTION_LEFT, movement);
+            gs->movement = move_player(gs, PLAYER_DIRECTION_LEFT, movement);
          }
          else if(was_pressed(input->move_right))
          {
-            gs->movement = move_player(level, PLAYER_DIRECTION_RIGHT, movement);
+            gs->movement = move_player(gs, PLAYER_DIRECTION_RIGHT, movement);
          }
 
          if(gs->movement.player_tile_delta > 0)
@@ -1479,7 +1499,7 @@ function GAME_UPDATE(game_update)
          // NOTE(law): Process other input interactions.
          if(was_pressed(input->undo))
          {
-            pop_undo(level);
+            pop_undo(gs);
          }
          else if(was_pressed(input->reload))
          {
