@@ -86,7 +86,7 @@ function PLATFORM_LOAD_FILE(platform_load_file)
    HANDLE find_file = FindFirstFileA(file_path, &file_data);
    if(find_file == INVALID_HANDLE_VALUE)
    {
-      platform_log("ERROR: Failed to find file \"%s\".\n", file_path);
+      platform_log("WARNING: Failed to find file \"%s\".\n", file_path);
       return(result);
    }
    FindClose(find_file);
@@ -121,7 +121,24 @@ function PLATFORM_LOAD_FILE(platform_load_file)
 
 function PLATFORM_SAVE_FILE(platform_save_file)
 {
-   return(0);
+   bool result = false;
+
+   HANDLE file = CreateFileA(file_path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+   if(file != INVALID_HANDLE_VALUE)
+   {
+      DWORD bytes_written;
+      BOOL success = WriteFile(file, memory, (DWORD)size, &bytes_written, 0);
+
+      result = (success && (size == (size_t)bytes_written));
+      if(!result)
+      {
+         platform_log("ERROR: Failed to write file \"%s.\"\n", file_path);
+      }
+
+      CloseHandle(file);
+   }
+
+   return(result);
 }
 
 function PLATFORM_ENQUEUE_WORK(platform_enqueue_work)
@@ -575,6 +592,18 @@ function bool win32_process_keyboard(MSG message, struct game_input *input)
             {
                win32_toggle_fullscreen(message.hwnd);
             }
+         } break;
+
+         case VK_F1:
+         {
+            input->function_keys[1].is_pressed = key_is_pressed;
+            input->function_keys[1].changed_state = key_changed_state;
+         } break;
+
+         case VK_F2:
+         {
+            input->function_keys[2].is_pressed = key_is_pressed;
+            input->function_keys[2].changed_state = key_changed_state;
          } break;
 
          case VK_F4:
