@@ -1151,16 +1151,32 @@ function void begin_level_transition(struct game_state *gs, struct render_bitmap
 struct save_data
 {
    u32 magic_number;
+
    u32 level_index;
    struct game_level level;
+
+   u32 undo_index;
+   u32 undo_count;
+   struct tile_map_state undos[256];
 };
 
 function void save_game(struct game_state *gs)
 {
    struct save_data data = {0};
+
    data.magic_number = SOKOBAN_SAVE_MAGIC_NUMBER;
+
+   // NOTE(law): Save level state information.
    data.level_index = gs->level_index;
    data.level = *gs->levels[gs->level_index];
+
+         // NOTE(law): Save undo information.
+   data.undo_index = gs->undo_index;
+   data.undo_count = gs->undo_count;
+   for(u32 index = 0; index < ARRAY_LENGTH(gs->undos); ++index)
+   {
+      data.undos[index] = gs->undos[index];
+   }
 
    platform_save_file("sokoban.save", &data, sizeof(data));
 }
@@ -1178,9 +1194,18 @@ function void load_game(struct game_state *gs)
 
          struct game_level *level = gs->levels[gs->level_index];
 
+         // NOTE(law): Load level state information.
          level->map = data->level.map;
          level->move_count = data->level.move_count;
          level->push_count = data->level.push_count;
+
+         // NOTE(law): Load undo information.
+         gs->undo_index = data->undo_index;
+         gs->undo_count = data->undo_count;
+         for(u32 index = 0; index < ARRAY_LENGTH(gs->undos); ++index)
+         {
+            gs->undos[index] = data->undos[index];
+         }
       }
 
       platform_free_file(&save);
