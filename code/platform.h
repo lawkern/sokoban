@@ -66,6 +66,9 @@ function PLATFORM_FREE_FILE(platform_free_file);
 #define PLATFORM_LOAD_FILE(name) struct platform_file name(char *file_path)
 function PLATFORM_LOAD_FILE(platform_load_file);
 
+#define PLATFORM_SAVE_FILE(name) bool name(char *file_path, void *memory, size_t size)
+function PLATFORM_SAVE_FILE(platform_save_file);
+
 #define PLATFORM_QUEUE_CALLBACK(name) void name(void *data)
 typedef PLATFORM_QUEUE_CALLBACK(queue_callback);
 
@@ -225,11 +228,13 @@ struct game_input
 
          struct platform_input_button next;
          struct platform_input_button previous;
+
+         struct platform_input_button function_keys[16];
       };
 
       // TODO(Law): Make sure the array size is always >= the number of buttons
       // defined above.
-      struct platform_input_button buttons[16];
+      struct platform_input_button buttons[32];
    };
 };
 

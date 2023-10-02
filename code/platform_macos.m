@@ -116,14 +116,14 @@ function PLATFORM_LOAD_FILE(platform_load_file)
    struct stat file_information;
    if(stat(file_path, &file_information) == -1)
    {
-      platform_log("ERROR: macOS failed to read file size of file: \"%s\".\n", file_path);
+      platform_log("ERROR (%d): macOS failed to read file size of file: \"%s\".\n", errno, file_path);
       return(result);
    }
 
    int file = open(file_path, O_RDONLY);
    if(file == -1)
    {
-      platform_log("ERROR: macOS failed to open file: \"%s\".\n", file_path);
+      platform_log("ERROR (%d): macOS failed to open file: \"%s\".\n", errno, file_path);
       return(result);
    }
 
@@ -141,6 +141,31 @@ function PLATFORM_LOAD_FILE(platform_load_file)
    }
 
    close(file);
+
+   return(result);
+}
+
+function PLATFORM_SAVE_FILE(platform_save_file)
+{
+   bool result = false;
+
+   int file = open(file_path, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+   if(file != -1)
+   {
+      ssize_t bytes_written = write(file, memory, size);
+      result = (bytes_written == size);
+
+      if(!result)
+      {
+         platform_log("ERROR (%d): macOS failed to write file: \"%s\".\n", errno, file_path);
+      }
+
+      close(file);
+   }
+   else
+   {
+      platform_log("ERROR (%d): macOS failed to open file: \"%s\".\n", errno, file_path);
+   }
 
    return(result);
 }
@@ -480,6 +505,16 @@ function bool macos_process_keyboard(NSEvent *event, struct game_input *input)
          {
             macos_set_key_state(&input->previous, key_is_pressed);
          } break;
+
+         case kVK_F1:
+         {
+            macos_set_key_state(&input->function_keys[1], key_is_pressed);
+         } break;
+
+         case kVK_F2:
+         {
+            macos_set_key_state(&input->function_keys[2], key_is_pressed);
+         } break;
       }
 
       result = true;
@@ -771,7 +806,7 @@ int main(int argument_count, char **arguments)
          }
          frame_start_count = frame_end_count;
 
-#if DEVELOPMENT_BUILD
+#if DEVELOPMENT_BUILD && 0
          static u32 frame_count;
          if((frame_count++ % 30) == 0)
          {

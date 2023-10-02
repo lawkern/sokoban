@@ -1146,6 +1146,47 @@ function void begin_level_transition(struct game_state *gs, struct render_bitmap
    begin_animation(&gs->level_transition);
 }
 
+#define SOKOBAN_SAVE_MAGIC_NUMBER 0x4F4B4F53 // SOKO
+
+struct save_data
+{
+   u32 magic_number;
+   u32 level_index;
+   struct game_level level;
+};
+
+function void save_game(struct game_state *gs)
+{
+   struct save_data data = {0};
+   data.magic_number = SOKOBAN_SAVE_MAGIC_NUMBER;
+   data.level_index = gs->level_index;
+   data.level = *gs->levels[gs->level_index];
+
+   platform_save_file("sokoban.save", &data, sizeof(data));
+}
+
+function void load_game(struct game_state *gs)
+{
+   struct platform_file save = platform_load_file("sokoban.save");
+   if(save.memory)
+   {
+      // TODO(law): Add better file format validation.
+      struct save_data *data = (struct save_data *)save.memory;
+      if(data->magic_number == SOKOBAN_SAVE_MAGIC_NUMBER)
+      {
+         gs->level_index = data->level_index;
+
+         struct game_level *level = gs->levels[gs->level_index];
+
+         level->map = data->level.map;
+         level->move_count = data->level.move_count;
+         level->push_count = data->level.push_count;
+      }
+
+      platform_free_file(&save);
+   }
+}
+
 function struct game_level *set_level(struct game_state *gs, struct render_bitmap snapshot, u32 index)
 {
    // NOTE(law): Update the current level specified in gs.
@@ -1163,6 +1204,9 @@ function struct game_level *set_level(struct game_state *gs, struct render_bitma
 
    // NOTE(law): Load the specified level.
    load_level(gs, level, level->file_path);
+
+   // NOTE(law): Save progress.
+   save_game(gs);
 
    return(level);
 }
@@ -1429,8 +1473,21 @@ function GAME_UPDATE(game_update)
       // NOTE(law): Set the initial menu state.
       gs->menu_state = MENU_STATE_TITLE;
 
+      // NOTE(law): Load saved level from disk.
+      load_game(gs);
+
       // NOTE(law): Add any required initialization above this point.
       gs->is_initialized = true;
+   }
+
+   if(was_pressed(input->function_keys[1]))
+   {
+      save_game(gs);
+   }
+
+   if(was_pressed(input->function_keys[2]))
+   {
+      load_game(gs);
    }
 
    if(gs->menu_state == MENU_STATE_TITLE)

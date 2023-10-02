@@ -152,6 +152,11 @@ function PLATFORM_LOAD_FILE(platform_load_file)
    return(result);
 }
 
+function PLATFORM_SAVE_FILE(platform_save_file)
+{
+   return(0);
+}
+
 function PLATFORM_ENQUEUE_WORK(platform_enqueue_work)
 {
    u32 new_write_index = (queue->write_index + 1) % ARRAY_LENGTH(queue->entries);
