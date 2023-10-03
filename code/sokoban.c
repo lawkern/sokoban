@@ -24,54 +24,8 @@ function void *allocate(struct memory_arena *arena, size_t size)
    return(result);
 }
 
-// NOTE(law): This pseudorandom number generation is based on the version
-// described at http://burtleburtle.net/bob/rand/smallprng.html
-
-struct random_entropy
-{
-   u64 a;
-   u64 b;
-   u64 c;
-   u64 d;
-};
-
-#define ROTATE(x, k) (((x) << (k)) | ((x) >> (32 - (k))))
-function u64 random_value(struct random_entropy *entropy)
-{
-   u64 entropy_e = entropy->a - ROTATE(entropy->b, 27);
-   entropy->a    = entropy->b ^ ROTATE(entropy->c, 17);
-   entropy->b    = entropy->c + entropy->d;
-   entropy->c    = entropy->d + entropy_e;
-   entropy->d    = entropy_e  + entropy->a;
-
-   return(entropy->d);
-}
-#undef ROTATE
-
-function struct random_entropy random_seed(u64 seed)
-{
-   struct random_entropy result;
-   result.a = 0xf1ea5eed;
-   result.b = seed;
-   result.c = seed;
-   result.d = seed;
-
-   for(u64 index = 0; index < 20; ++index)
-   {
-      random_value(&result);
-   }
-
-   return(result);
-}
-
-function u32 random_range(struct random_entropy *entropy, u32 minimum, u32 maximum)
-{
-   u64 value = random_value(entropy);
-   u32 range = maximum - minimum + 1;
-
-   u32 result = (u32)((value % (u64)range) + (u64)minimum);
-   return(result);
-}
+#include "sokoban_math.c"
+#include "sokoban_random.c"
 
 struct font_glyphs
 {
@@ -195,6 +149,11 @@ struct game_state
    struct render_bitmap floor[FLOOR_TYPE_COUNT];
    struct render_bitmap wall[WALL_TYPE_COUNT];
    struct render_bitmap goal;
+
+   u32 grass_cell_dimension;
+   u32 grass_grid_width;
+   u32 grass_grid_height;
+   struct noise_samples grass_positions;
 
    union
    {
@@ -541,7 +500,7 @@ function bool load_level(struct game_state *gs, struct game_level *level, char *
             for(u32 x = 0; x < SCREEN_TILE_COUNT_X; ++x)
             {
                struct tile_attributes *attributes = level->attributes[y] + x;
-               attributes->floor_index = random_range(entropy, 0, FLOOR_TYPE_COUNT - 1);
+               attributes->floor_index = 0; // random_range(entropy, 0, FLOOR_TYPE_COUNT - 1);
 
                if(level->map.tiles[y][x] == TILE_TYPE_WALL)
                {
@@ -549,6 +508,10 @@ function bool load_level(struct game_state *gs, struct game_level *level, char *
                }
             }
          }
+
+         // NOTE(law): Compute grass placements.
+         generate_blue_noise(&gs->grass_positions, &gs->entropy, &gs->arena,
+                             gs->grass_grid_width, gs->grass_grid_height, gs->grass_cell_dimension);
 
          result = true;
       }
@@ -809,12 +772,6 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
    TIMER_END(immediate_clear);
 }
 
-typedef struct
-{
-   float x;
-   float y;
-} v2;
-
 function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 max, u32 color)
 {
    s32 minx = MAXIMUM(0, (s32)min.x);
@@ -907,21 +864,6 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
    }
 
    TIMER_END(immediate_screen_bitmap);
-}
-
-// TODO(law): Remove dependency on math.h!
-#include <math.h>
-
-function s32 floor_s32(float value)
-{
-   s32 result = (s32)floorf(value);
-   return(result);
-}
-
-function s32 ceiling_s32(float value)
-{
-   s32 result = (s32)ceilf(value);
-   return(result);
 }
 
 function void immediate_bitmap(struct render_bitmap destination, struct render_bitmap source,
@@ -1306,7 +1248,7 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
          // occluded anyway.
 
          struct tile_attributes attributes = level->attributes[tiley][tilex];
-         immediate_tile_bitmap(render_output, gs->floor[attributes.floor_index], x, y);
+         // immediate_tile_bitmap(render_output, gs->floor[attributes.floor_index], x, y);
 
          enum tile_type type = level->map.tiles[tiley][tilex];
          switch(type)
@@ -1366,6 +1308,26 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
    assert((SCREEN_TILE_COUNT_X % RENDER_TILE_COUNT_X) == 0);
    assert((SCREEN_TILE_COUNT_Y % RENDER_TILE_COUNT_Y) == 0);
 
+   for(u32 index = 0; index < gs->grass_positions.count; ++index)
+   {
+      // TODO(law): Stop hard-coding pixel dimensions!
+
+      // Center:
+      v2 min = gs->grass_positions.samples[index];
+      v2 max = {min.x + 1, min.y + 1};
+      immediate_rectangle(render_output, min, max, 0xFF3F3F74);
+
+      // Left blade:
+      min = (v2){min.x - 2, min.y - 2};
+      max = (v2){min.x + 1, min.y + 1};
+      immediate_rectangle(render_output, min, max, 0xFF3F3F74);
+
+      // Right blade:
+      min = (v2){min.x + 4, min.y};
+      max = (v2){min.x + 1, min.y + 1};
+      immediate_rectangle(render_output, min, max, 0xFF3F3F74);
+   }
+
    u32 tile_index = 0;
    for(u32 y = 0; y < RENDER_TILE_COUNT_Y; ++y)
    {
@@ -1396,7 +1358,7 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
 function void title_menu(struct game_state *gs, struct render_bitmap render_output,
                          struct game_input *input, struct platform_work_queue *queue)
 {
-   immediate_clear(render_output, 0xFFFF00FF);
+   immediate_clear(render_output, 0xFF222034);
    render_stationary_tiles_all(gs, render_output, queue);
 
    float posx = TILE_DIMENSION_PIXELS * 0.5f;
@@ -1456,6 +1418,14 @@ function GAME_UPDATE(game_update)
 
       // NOTE(law): Load any fonts we need.
       load_font(&gs->font, &gs->arena, "../data/atari.font");
+
+      // NOTE(law): Allocate grass positions.
+      gs->grass_cell_dimension = TILE_DIMENSION_PIXELS / 2;
+      gs->grass_grid_width  = (RESOLUTION_BASE_WIDTH / gs->grass_cell_dimension);
+      gs->grass_grid_height = (RESOLUTION_BASE_HEIGHT / gs->grass_cell_dimension);
+
+      gs->grass_positions.count = 0;
+      gs->grass_positions.samples = ALLOCATE_SIZE(&gs->arena, gs->grass_grid_width * gs->grass_grid_height * sizeof(v2));
 
       // NOTE(law): Allocate, load, and store levels.
       for(u32 index = 0; index < ARRAY_LENGTH(gs->levels); ++index)
@@ -1598,7 +1568,7 @@ function GAME_UPDATE(game_update)
       }
 
       // NOTE(law): Clear the screen each frame.
-      immediate_clear(render_output, 0xFFFF00FF);
+      immediate_clear(render_output, 0xFF222034);
 
       // NOTE(law): First render pass for non-animating objects.
       render_stationary_tiles_all(gs, render_output, queue);

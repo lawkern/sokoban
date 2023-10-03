@@ -126,6 +126,7 @@ enum platform_timer_id
    PLATFORM_TIMER_immediate_clear,
    PLATFORM_TIMER_immediate_bitmap,
    PLATFORM_TIMER_immediate_screen_bitmap,
+   PLATFORM_TIMER_generate_blue_noise,
 
    PLATFORM_TIMER_COUNT,
 };
