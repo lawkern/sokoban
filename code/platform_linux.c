@@ -17,6 +17,7 @@
 #include <GL/glx.h>
 #include <GL/glu.h>
 
+#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -154,7 +155,27 @@ function PLATFORM_LOAD_FILE(platform_load_file)
 
 function PLATFORM_SAVE_FILE(platform_save_file)
 {
-   return(0);
+   bool result = false;
+
+   int file = open(file_path, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+   if(file != -1)
+   {
+      ssize_t bytes_written = write(file, memory, size);
+      result = (bytes_written == size);
+
+      if(!result)
+      {
+         platform_log("ERROR (%d): Linux failed to write file: \"%s\".\n", errno, file_path);
+      }
+
+      close(file);
+   }
+   else
+   {
+      platform_log("ERROR (%d): Linux failed to open file: \"%s\".\n", errno, file_path);
+   }
+
+   return(result);
 }
 
 function PLATFORM_ENQUEUE_WORK(platform_enqueue_work)
