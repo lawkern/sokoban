@@ -1358,6 +1358,12 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
 function void title_menu(struct game_state *gs, struct render_bitmap render_output,
                          struct game_input *input, struct platform_work_queue *queue)
 {
+   if(was_pressed(input->confirm))
+   {
+      gs->menu_state = MENU_STATE_NONE;
+      begin_level_transition(gs, render_output);
+   }
+
    immediate_clear(render_output, 0xFF222034);
    render_stationary_tiles_all(gs, render_output, queue);
 
@@ -1367,31 +1373,11 @@ function void title_menu(struct game_state *gs, struct render_bitmap render_outp
 
    immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <Enter> to start");
    immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "SOKOBAN 2023 (WORKING TITLE)");
-
-   if(was_pressed(input->confirm))
-   {
-      gs->menu_state = MENU_STATE_NONE;
-      begin_level_transition(gs, render_output);
-   }
 }
 
 function void pause_menu(struct game_state *gs, struct render_bitmap render_output, struct game_input *input)
 {
-   immediate_clear(render_output, 0xFF222034);
-   immediate_screen_bitmap(render_output, gs->snapshot, 0.25f);
-
-   float posx = TILE_DIMENSION_PIXELS * 0.5f;
-   float posy = (float)render_output.height - TILE_DIMENSION_PIXELS;
-   float height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE * 1.35f;
-
-   immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <q> to return to title");
-   immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "Press <p> to resume");
-
-   immediate_text(render_output, &gs->font, posx, posy - 3.25f*height, "<Shift> to charge (will push)");
-   immediate_text(render_output, &gs->font, posx, posy - 4.25f*height, "<Ctrl> to dash (won't push)");
-   immediate_text(render_output, &gs->font, posx, posy - 5.25f*height, "<wasd> or <arrows> to move");
-
-   if(was_pressed(input->pause))
+   if(was_pressed(input->pause) || was_pressed(input->confirm))
    {
       gs->menu_state = MENU_STATE_NONE;
    }
@@ -1399,6 +1385,43 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
    {
       gs->menu_state = MENU_STATE_TITLE;
    }
+   else if(was_pressed(input->move_up))
+   {
+      gs->level_index = (gs->level_index == 0) ? gs->level_count - 1 : gs->level_index - 1;
+   }
+   else if(was_pressed(input->move_down))
+   {
+      gs->level_index = (gs->level_index == gs->level_count - 1) ? 0 : gs->level_index + 1;
+   }
+
+   immediate_clear(render_output, 0xFF222034);
+   immediate_screen_bitmap(render_output, gs->snapshot, 0.25f);
+
+   float posx = TILE_DIMENSION_PIXELS * 0.5f;
+   float posy = (float)render_output.height - TILE_DIMENSION_PIXELS;
+   float height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE * 1.35f;
+
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <q> to return to title");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <wasd> or <arrows> to change levels");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <p> or <Enter> to resume");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "Menu Controls:");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "-------------------------------------");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <u> to undo");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <Shift> to charge (will push)");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <Ctrl> to dash (won't push)");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "  <wasd> or <arrows> to move");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "Game Controls:");
+   immediate_text(render_output, &gs->font, posx, posy -= height, "-------------------------------------");
+
+   for(u32 index = 0; index < gs->level_count; ++index)
+   {
+      u32 level_index = gs->level_count - index - 1;
+      struct game_level *level = gs->levels[level_index];
+
+      char *format = (level_index == gs->level_index) ? "* %d: %s" : "  %d: %s";
+      immediate_text(render_output, &gs->font, posx, posy -= height, format, level_index + 1, level->name);
+   }
+   immediate_text(render_output, &gs->font, posx, posy -= height, "Levels:");
 }
 
 function GAME_UPDATE(game_update)
