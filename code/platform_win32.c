@@ -802,8 +802,13 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          print_timers(frame_count);
 
          float frame_ms = frame_seconds_elapsed * 1000.0f;
-         platform_log("Frame time: %0.03fms, ", frame_ms);
-         platform_log("Sleep: %ums (%.2f%%)\n\n", sleep_ms, 100.0f * (sleep_ms / frame_ms));
+         float target_ms = target_seconds_per_frame * 1000.0f;
+         float frame_utilization = ((frame_ms - sleep_ms) / target_ms * 100.0f);
+
+         platform_log("Frame: %0.03fms, ", frame_ms);
+         platform_log("Target: %0.03fms, ", target_ms);
+         platform_log("Sleep: %ums, ", sleep_ms);
+         platform_log("Frame utilization: %.2f%%\n\n", frame_utilization);
       }
 #endif
    }
