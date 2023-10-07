@@ -1155,21 +1155,21 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
    // NOTE(law): Display menu sections.
    static char *game_controls[] =
    {
-      "Game Controls:",
-      "  <wasd> or <arrows> to move",
-      "  <Ctrl> to dash (won't push)",
-      "  <Shift> to charge (will push)",
-      "  <u> to undo move",
-      "  <p> to pause",
-      "  <r> to restart level",
+      "GAME CONTROLS",
+      "<wasd> or <arrows> to move",
+      "<Ctrl> to dash (won't push)",
+      "<Shift> to charge (will push)",
+      "<u> to undo move",
+      "<p> to pause",
+      "<r> to restart level",
    };
 
    static char *menu_controls[] =
    {
-      "Menu Controls:",
-      "  <p> or <Enter> to resume",
-      "  <wasd> or <arrows> to change levels",
-      "  <q> to return to title",
+      "MENU CONTROLS",
+      "<p> or <Enter> to resume",
+      "<wasd> or <arrows> to change levels",
+      "<q> to return to title",
    };
 
    struct {char **entries; u32 count;} sections[] =
@@ -1178,48 +1178,89 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
       {menu_controls, ARRAY_LENGTH(menu_controls)},
    };
 
-   float text_padding = 0.5f * TILE_DIMENSION_PIXELS;
-   float border_padding = 0.5f * text_padding;
-
    u32 border_color = 0xFF3F3F74;
-   u32 border_thickness = TILE_DIMENSION_PIXELS / 16;
+   u32 border_thickness = TILE_DIMENSION_PIXELS / 8;
 
-   float text_height = COMPUTE_FONT_HEIGHT(gs->font, TILE_BITMAP_SCALE * 1.35f);
-   float textx = text_padding;
-   float texty = text_padding;
+   float section_margin_x = 5.0f * TILE_DIMENSION_PIXELS;
+   float section_margin_y = 0.5f * TILE_DIMENSION_PIXELS;
+   float section_padding = 0.25f * TILE_DIMENSION_PIXELS;
+
+   float line_height = COMPUTE_FONT_HEIGHT(gs->font, TILE_BITMAP_SCALE * 1.5f);
+   float textx = section_margin_x;
+   float texty = section_margin_y;
 
    for(u32 section_index = 0; section_index < ARRAY_LENGTH(sections); ++section_index)
    {
       u32 entry_count = sections[section_index].count;
       char **entries = sections[section_index].entries;
 
-      v2 section_min = {textx - border_padding, texty - border_padding};
-      for(u32 entry_index = 0; entry_index < entry_count; ++entry_index)
+      assert(entry_count > 0);
+
+      // NOTE(law): Display the section header text outside the border.
+      immediate_text(render_output, &gs->font, textx, texty, entries[0]);
+      texty += line_height;
+
+      v2 section_min = {textx, texty};
+      for(u32 entry_index = 1; entry_index < entry_count; ++entry_index)
       {
-         immediate_text(render_output, &gs->font, textx, texty, entries[entry_index]);
-         texty += text_height;
+         immediate_text(render_output, &gs->font, textx + section_padding, texty + section_padding, entries[entry_index]);
+         texty += line_height;
       }
-      v2 section_max = {render_output.width - border_padding, texty + border_padding};
+      v2 section_max = {render_output.width - section_margin_x, texty + (2.0f * section_padding)};
       immediate_outline(render_output, section_min, section_max, border_color, border_thickness);
 
-      texty += text_height;
+      texty += (2.0f * section_margin_y) + (2.0f * section_padding);
    }
 
    // NOTE(law): Fill remaining space with level selection.
-   v2 section_min = {textx - border_padding, texty - border_padding};
-   immediate_text(render_output, &gs->font, textx, texty, "Levels:");
-   texty += text_height;
+   immediate_text(render_output, &gs->font, textx, texty, "LEVELS");
+   texty += line_height;
 
-   for(u32 level_index = 0; level_index < gs->level_count; ++level_index)
+   float remaining_section_height = render_output.height - texty - section_margin_y - section_padding;
+   u32 visible_level_count = (u32)(remaining_section_height / line_height);
+
+   // NOTE(law): Determine the first and last level indices to render.
+   u32 first_visible_index = 0;
+   u32 last_visible_index = visible_level_count - 1;
+   if(gs->level_index >= visible_level_count)
    {
-      struct game_level *level = gs->levels[level_index];
-      char *format = (level_index == gs->level_index) ? "* %d: %s" : "  %d: %s";
-      immediate_text(render_output, &gs->font, textx, texty, format, level_index + 1, level->name);
-      texty += text_height;
+      first_visible_index = (gs->level_index / visible_level_count) * visible_level_count;
+      last_visible_index = first_visible_index + visible_level_count - 1;
    }
 
-   v2 section_max = {render_output.width - border_padding, render_output.height - border_padding};
+   // NOTE(law): Render level names.
+   v2 section_min = {textx, texty};
+   for(u32 level_index = first_visible_index; level_index <= last_visible_index; ++level_index)
+   {
+      if(level_index < gs->level_count)
+      {
+         struct game_level *level = gs->levels[level_index];
+         char *format = (level_index == gs->level_index) ? "->%02d. %s" : "  %02d. %s";
+         immediate_text(render_output, &gs->font, textx + section_padding, texty + section_padding,
+                        format, level_index + 1, level->name);
+      }
+      texty += line_height;
+   }
+   v2 section_max = {render_output.width - section_margin_x, texty + (2.0f * section_padding)};
    immediate_outline(render_output, section_min, section_max, border_color, border_thickness);
+
+   // NOTE(law): If all levels don't fit onscreen, draw a scrollbar.
+   if(visible_level_count < gs->level_count)
+   {
+      u32 scroll_section = gs->level_index / visible_level_count;
+      u32 scroll_section_count = (gs->level_count / visible_level_count) + 1;
+
+      float level_section_height = (section_max.y - section_min.y) - (2.0f * section_padding);
+      float scrollbar_height = level_section_height / (float)scroll_section_count;
+
+      float scrollbar_miny = section_min.y + section_padding + (scroll_section * scrollbar_height);
+      float scrollbar_maxy = scrollbar_miny + scrollbar_height;
+      float scrollbar_width = 2.0f * border_thickness;
+
+      v2 scroll_max = {section_max.x - section_padding, scrollbar_maxy};
+      v2 scroll_min = {scroll_max.x - scrollbar_width, scrollbar_miny};
+      immediate_rectangle(render_output, scroll_min, scroll_max, border_color);
+   }
 }
 
 function GAME_UPDATE(game_update)
@@ -1253,11 +1294,17 @@ function GAME_UPDATE(game_update)
       {
          gs->levels[index] = ALLOCATE_TYPE(&gs->arena, struct game_level);
       }
-      store_level(gs, "../data/levels/simple.sok");
-      store_level(gs, "../data/levels/skull.sok");
-      store_level(gs, "../data/levels/snake.sok");
-      store_level(gs, "../data/levels/chunky.sok");
-      store_level(gs, "../data/levels/empty_section.sok");
+      store_level(gs, "../data/levels/Simple Right.sok");
+      store_level(gs, "../data/levels/Simple Down.sok");
+      store_level(gs, "../data/levels/Simple Left.sok");
+      store_level(gs, "../data/levels/Simple Up.sok");
+      store_level(gs, "../data/levels/Simple Up Wide.sok");
+      store_level(gs, "../data/levels/Circle.sok");
+      store_level(gs, "../data/levels/Skull.sok");
+      store_level(gs, "../data/levels/Snake.sok");
+      store_level(gs, "../data/levels/Chunky.sok");
+      store_level(gs, "../data/levels/Lanky.sok");
+      store_level(gs, "../data/levels/Empty Section.sok");
 
       // NOTE(law): Load bitmap assets.
       gs->floor[FLOOR_TYPE_00] = load_bitmap(&gs->arena, "../data/artwork/floor00.bmp");
@@ -1271,11 +1318,10 @@ function GAME_UPDATE(game_update)
       gs->wall[WALL_TYPE_CORNER_SE] = load_bitmap(&gs->arena, "../data/artwork/wall_se.bmp");
       gs->wall[WALL_TYPE_CORNER_SW] = load_bitmap(&gs->arena, "../data/artwork/wall_sw.bmp");
 
-      gs->player         = load_bitmap(&gs->arena, "../data/artwork/player.bmp");
-      gs->player_on_goal = load_bitmap(&gs->arena, "../data/artwork/player_on_goal.bmp");
-      gs->box            = load_bitmap(&gs->arena, "../data/artwork/box.bmp");
-      gs->box_on_goal    = load_bitmap(&gs->arena, "../data/artwork/box_on_goal.bmp");
-      gs->goal           = load_bitmap(&gs->arena, "../data/artwork/goal.bmp");
+      gs->player      = load_bitmap(&gs->arena, "../data/artwork/player.bmp");
+      gs->box         = load_bitmap(&gs->arena, "../data/artwork/box.bmp");
+      gs->box_on_goal = load_bitmap(&gs->arena, "../data/artwork/box_on_goal.bmp");
+      gs->goal        = load_bitmap(&gs->arena, "../data/artwork/goal.bmp");
 
       // NOTE(law): Set animation lengths.
       gs->player_movement.seconds_duration = 0.0666666f;
@@ -1455,18 +1501,18 @@ function GAME_UPDATE(game_update)
       immediate_tile_bitmap(render_output, gs->player, playerx, playery);
 
       // NOTE(law): Render UI.
-      float text_height = COMPUTE_FONT_HEIGHT(gs->font, TILE_BITMAP_SCALE);
+      float line_height = COMPUTE_FONT_HEIGHT(gs->font, TILE_BITMAP_SCALE);
       float textx = 0.5f * TILE_DIMENSION_PIXELS;
-      float texty = 0.5f * text_height;
+      float texty = 0.5f * line_height;
 
       immediate_text(render_output, &gs->font, textx, texty, "%s", level->name);
-      texty += text_height;
+      texty += line_height;
 
       immediate_text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);
-      texty += text_height;
+      texty += line_height;
 
       immediate_text(render_output, &gs->font, textx, texty, "Push Count: %u", level->push_count);
-      texty += text_height;
+      texty += line_height;
 
       // NOTE(law): Render level transition overlay.
       if(is_animating(&gs->level_transition))

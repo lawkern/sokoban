@@ -45,21 +45,21 @@ function void immediate_outline(struct render_bitmap destination, v2 min, v2 max
 {
    // NOTE(law): Top.
    v2 top_min = {min.x, min.y};
-   v2 top_max = {max.x, min.y + thickness};
+   v2 top_max = {max.x, min.y + thickness - 1};
    immediate_rectangle(destination, top_min, top_max, color);
 
    // NOTE(law): Bottom.
-   v2 bottom_min = {min.x, max.y - thickness};
+   v2 bottom_min = {min.x, max.y - thickness + 1};
    v2 bottom_max = {max.x, max.y};
    immediate_rectangle(destination, bottom_min, bottom_max, color);
 
    // NOTE(law): Left.
    v2 left_min = {min.x, min.y};
-   v2 left_max = {min.x + thickness, max.y};
+   v2 left_max = {min.x + thickness - 1, max.y};
    immediate_rectangle(destination, left_min, left_max, color);
 
    // NOTE(law): Right.
-   v2 right_min = {max.x - thickness, min.y};
+   v2 right_min = {max.x - thickness + 1, min.y};
    v2 right_max = {max.x, max.y};
    immediate_rectangle(destination, right_min, right_max, color);
 }
