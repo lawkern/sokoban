@@ -743,11 +743,16 @@ int main(int argument_count, char **arguments)
 
       macos_initialize_metal(view, bitmap.width, bitmap.height);
 
+      // NOTE(law): Initialize game memory.
       struct game_memory memory = {0};
       memory.size = 512 * 1024 * 1024;
       memory.base_address = mmap(0, memory.size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
 
+      // NOTE(law): Initialize game input.
       struct game_input input = {0};
+
+      // NOTE(law): Initialize sound output.
+      struct game_sound_output sound = {0};
 
       float target_seconds_per_frame = 1.0f / 60.0f;
       float frame_seconds_elapsed = 0;
@@ -777,8 +782,9 @@ int main(int argument_count, char **arguments)
             [NSApp sendEvent:event];
          }
 
-         game_update(memory, bitmap, &input, &queue, frame_seconds_elapsed);
-         // game_update(memory, bitmap, &input, &queue, target_seconds_per_frame);
+         // NOTE(law): Update game state.
+         game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
+         // game_update(memory, bitmap, &input, &sound, &queue, target_seconds_per_frame);
 
          // NOTE(law): Calculate elapsed frame time.
          u64 frame_end_count = mach_absolute_time();

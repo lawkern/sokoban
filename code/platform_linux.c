@@ -943,11 +943,16 @@ int main(int argument_count, char **arguments)
    linux_global_display = XOpenDisplay(0);
    Window window = linux_initialize_opengl(bitmap);
 
+   // NOTE(law): Initialize game memory.
    struct game_memory memory = {0};
    memory.size = 512 * 1024 * 1024;
    memory.base_address = linux_allocate(memory.size);
 
+   // NOTE(law): Initialize game input.
    struct game_input input = {0};
+
+   // NOTE(law): Initialize sound output.
+   struct game_sound_output sound = {0};
 
    float target_seconds_per_frame = 1.0f / 60.0f;
    float frame_seconds_elapsed = 0;
@@ -969,8 +974,9 @@ int main(int argument_count, char **arguments)
 
       linux_process_events(window, &input);
 
-      game_update(memory, bitmap, &input, &queue, frame_seconds_elapsed);
-      // game_update(memory, bitmap, &input, &queue, target_seconds_per_frame);
+      // NOTE(law): Update game state.
+      game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
+      // game_update(memory, bitmap, &input, &sound, &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
       linux_display_bitmap(window, bitmap);
