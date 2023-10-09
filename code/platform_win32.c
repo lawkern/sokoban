@@ -2,7 +2,13 @@
 /* (c) copyright 2023 Lawrence D. Kern /////////////////////////////////////// */
 /* /////////////////////////////////////////////////////////////////////////// */
 
+#define COBJMACROS
+#define INITGUID
+#define CINTERFACE
+
 #include <windows.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
 #include <stdio.h>
 
 typedef HANDLE platform_semaphore;
@@ -27,6 +33,9 @@ global WINDOWPLACEMENT win32_global_previous_window_placement =
 {
    sizeof(win32_global_previous_window_placement)
 };
+
+global IAudioClient *win32_global_sound_client;
+global IAudioRenderClient *win32_global_sound_render_client;
 
 global int win32_global_dpi = WIN32_DEFAULT_DPI;
 global HANDLE win32_global_small_icon16;
@@ -211,6 +220,113 @@ function DWORD WINAPI win32_thread_procedure(void *parameter)
    return(0);
 }
 
+const CLSID CLSID_MMDeviceEnumerator = {0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
+const IID IID_IMMDeviceEnumerator    = {0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6}};
+const IID IID_IAudioClient           = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
+const IID IID_IAudioRenderClient     = {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
+const GUID KSDATAFORMAT_SUBTYPE_PCM  = {0x00000001, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+
+function u32 win32_initialize_wasapi(u32 samples_per_second, u32 requested_sample_count)
+{
+   u32 result = 0;
+
+   if(FAILED(CoInitializeEx(0, COINIT_SPEED_OVER_MEMORY)))
+   {
+      platform_log("ERROR: Windows failed to coinitialize for WASAPI.\n");
+      return(result);
+   }
+
+   IMMDeviceEnumerator *enumerator;
+   if(FAILED(CoCreateInstance(&CLSID_MMDeviceEnumerator, 0, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &enumerator)))
+   {
+      platform_log("ERROR: Windows failed to create WASAPI enumerator.\n");
+      return(result);
+   }
+
+   IMMDevice *device;
+   if(FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device)))
+   {
+      platform_log("ERROR: Windows failed to get WASAPI audio endpoint.\n");
+      return(result);
+   }
+
+   if(FAILED(IMMDeviceActivator_Activate(device, &IID_IAudioClient, CLSCTX_ALL, 0, (LPVOID *)&win32_global_sound_client)))
+   {
+      platform_log("ERROR: Windows failed to activate WASAPI audio client.\n");
+      return(result);
+   }
+
+   WAVEFORMATEX format;
+   format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+   format.nChannels = 2;
+   format.nSamplesPerSec = (DWORD)samples_per_second;
+   format.wBitsPerSample = 16;
+   format.nBlockAlign = (WORD)(format.nChannels * format.wBitsPerSample / 8);
+   format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+   format.cbSize = sizeof(WAVEFORMATEXTENSIBLE);
+
+   WAVEFORMATEXTENSIBLE wave_format;
+   wave_format.Format = format;
+   wave_format.Samples.wValidBitsPerSample = 16;
+   wave_format.dwChannelMask = KSAUDIO_SPEAKER_STEREO;
+   wave_format.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+
+   // NOTE(law) Duration is in 100-nanosecond units.
+   REFERENCE_TIME duration = 10000000ULL * (requested_sample_count / samples_per_second);
+   if(FAILED(IAudioClient_Initialize(win32_global_sound_client, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, duration, 0, &wave_format.Format, 0)))
+   {
+      platform_log("ERROR: Windows failed to initialize WASAPI audio client.\n");
+      return(result);
+   }
+
+   if(FAILED(IAudioClient_GetService(win32_global_sound_client, &IID_IAudioRenderClient, &win32_global_sound_render_client)))
+   {
+      platform_log("ERROR: Windows failed to get WASAPI audio render client.\n");
+      return(result);
+   }
+
+   if(FAILED(IAudioClient_GetBufferSize(win32_global_sound_client, &result)))
+   {
+      platform_log("ERROR: Windows failed to get WASAPI sound buffer size.\n");
+      return(result);
+   }
+
+   return(result);
+}
+
+function u32 win32_compute_sound_sample_count(u32 max_sample_count, u32 sample_latency_count)
+{
+   u32 result = 0;
+
+   u32 sample_padding_count = 0;
+   if(SUCCEEDED(IAudioClient_GetCurrentPadding(win32_global_sound_client, &sample_padding_count)))
+   {
+      result = max_sample_count - sample_padding_count;
+      if((s32)result > (s32)sample_latency_count)
+      {
+         result = sample_latency_count;
+      }
+   }
+
+   return(result);
+}
+
+function void win32_output_sound(s16 *samples, u32 sample_count)
+{
+   BYTE *destination_bytes;
+   if(SUCCEEDED(IAudioRenderClient_GetBuffer(win32_global_sound_render_client, sample_count, &destination_bytes)))
+   {
+      s16 *source = samples;
+      s16 *destination = (s16 *)destination_bytes;
+      for(u32 index = 0; index < sample_count; ++index)
+      {
+         *destination++ = *source++; // Left channel
+         *destination++ = *source++; // Right channel
+      }
+
+      IAudioRenderClient_ReleaseBuffer(win32_global_sound_render_client, sample_count, 0);
+   }
+}
 
 function bool win32_is_fullscreen(HWND window)
 {
@@ -708,6 +824,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       return(1);
    }
 
+   // NOTE(law): Initialize render bitmap.
    BITMAPINFOHEADER bitmap_header = {0};
    bitmap_header.biSize = sizeof(BITMAPINFOHEADER);
    bitmap_header.biWidth = bitmap.width;
@@ -724,14 +841,39 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    ShowWindow(window, show_command);
    UpdateWindow(window);
 
+   // NOTE(law): Initialize game memory.
    struct game_memory memory = {0};
    memory.size = 512 * 1024 * 1024;
    memory.base_address = VirtualAlloc(0, memory.size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
 
+   // NOTE(law): Initialize game input.
    struct game_input input = {0};
 
-   float target_seconds_per_frame = 1.0f / 60.0f;
+   // TODO(law): Move sound handling to its own dedicated thread.
+
+   // NOTE(law): Initialize sound output.
+   struct game_sound_output sound = {0};
+   sound.samples_per_second = 48000;
+
+   u32 requested_sample_count = 2 * sound.samples_per_second; // 2 seconds of samples.
+   sound.max_sample_count = win32_initialize_wasapi(sound.samples_per_second, requested_sample_count);
+   assert(sound.max_sample_count == requested_sample_count);
+
+   u32 bytes_per_sample = 2 * sizeof(s16);
+   sound.samples = VirtualAlloc(0, sound.max_sample_count * bytes_per_sample, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+   if(!sound.samples)
+   {
+      platform_log("ERROR: Windows failed to allocate the sound samples.\n");
+      return(1);
+   }
+   IAudioClient_Start(win32_global_sound_client);
+
+   u32 target_frames_per_second = 60;
+   float target_seconds_per_frame = 1.0f / target_frames_per_second;
    float frame_seconds_elapsed = 0;
+
+   u32 frame_latency_count = 5;
+   u32 sample_latency_count = frame_latency_count * sound.samples_per_second / target_frames_per_second;
 
    LARGE_INTEGER frame_start_count;
    QueryPerformanceCounter(&frame_start_count);
@@ -760,13 +902,20 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
          DispatchMessage(&message);
       }
 
-      game_update(memory, bitmap, &input, &queue, frame_seconds_elapsed);
-      // game_update(memory, bitmap, &input, &queue, target_seconds_per_frame);
+      // NOTE(law): Determine how many sound samples to write this frame.
+      sound.sample_count = win32_compute_sound_sample_count(sound.max_sample_count, sample_latency_count);
+
+      // NOTE(law): Update game state.
+      game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
+      // game_update(memory, bitmap, &input, &sound &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);
       win32_display_bitmap(bitmap, window, device_context);
       ReleaseDC(window, device_context);
+
+      // NOTE(law): Fill sound buffer.
+      win32_output_sound(sound.samples, sound.sample_count);
 
       // NOTE(law): Calculate elapsed frame time.
       LARGE_INTEGER frame_end_count;

@@ -8,7 +8,7 @@ IF %DEVELOPMENT_BUILD%==1 (
 )
 
 SET COMPILER_FLAGS=-nologo -Z7 -Oi -Od -FC -MT -diagnostics:column %WARNING_FLAGS% -DDEVELOPMENT_BUILD=%DEVELOPMENT_BUILD%
-SET LINKER_FLAGS=-opt:ref -incremental:no user32.lib gdi32.lib winmm.lib
+SET LINKER_FLAGS=-opt:ref -incremental:no user32.lib gdi32.lib winmm.lib ole32.lib mmdevapi.lib
 
 IF NOT EXIST ..\build mkdir ..\build
 PUSHD ..\build

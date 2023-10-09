@@ -18,10 +18,12 @@
 #define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
 #define LERP(a, t, b) (((1.0f - (t)) * (a)) + ((t) * (b)))
 
-typedef uint8_t u8;
+typedef  uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
+
+typedef int16_t s16;
 typedef int32_t s32;
 
 function void zero_memory(void *memory, size_t size)
@@ -195,6 +197,15 @@ struct game_memory
    u8 *base_address;
 };
 
+struct game_sound_output
+{
+   u32 samples_per_second;
+   u32 max_sample_count;
+
+   u32 sample_count;
+   s16 *samples;
+};
+
 struct render_bitmap
 {
    s32 width;
@@ -242,6 +253,7 @@ struct game_input
 #define GAME_UPDATE(name) void name(struct game_memory memory,          \
                                     struct render_bitmap render_output, \
                                     struct game_input *input,           \
+                                    struct game_sound_output *sound,    \
                                     struct platform_work_queue *queue,  \
                                     float frame_seconds_elapsed)
 

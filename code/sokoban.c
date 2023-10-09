@@ -1263,6 +1263,26 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
    }
 }
 
+function void generate_sound_samples(struct game_sound_output *sound)
+{
+   for(u32 index = 0; index < sound->sample_count; ++index)
+   {
+      static float counter = 0;
+      float wave_period = sound->samples_per_second / 256.0f;
+
+      float volume = 2048.0f * 4;
+      s16 sample_value = (s16)(sine(counter++ / wave_period) * volume);
+
+      sound->samples[(2 * index) + 0] = sample_value;
+      sound->samples[(2 * index) + 1] = sample_value;
+
+      if(counter > wave_period)
+      {
+         counter -= wave_period;
+      }
+   }
+}
+
 function GAME_UPDATE(game_update)
 {
    TIMER_BEGIN(game_update);
@@ -1529,6 +1549,8 @@ function GAME_UPDATE(game_update)
          level = next_level(gs, render_output);
       }
    }
+
+   generate_sound_samples(sound);
 
    TIMER_END(game_update);
 }
