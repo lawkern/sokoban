@@ -849,15 +849,22 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    // NOTE(law): Initialize game input.
    struct game_input input = {0};
 
+   u32 target_frames_per_second = 60;
+   float target_seconds_per_frame = 1.0f / target_frames_per_second;
+   float frame_seconds_elapsed = 0;
+
    // TODO(law): Move sound handling to its own dedicated thread.
 
    // NOTE(law): Initialize sound output.
    struct game_sound_output sound = {0};
-   sound.samples_per_second = 48000;
 
-   u32 requested_sample_count = 2 * sound.samples_per_second; // 2 seconds of samples.
-   sound.max_sample_count = win32_initialize_wasapi(sound.samples_per_second, requested_sample_count);
-   assert(sound.max_sample_count == requested_sample_count);
+   u32 requested_sample_count = (u32)(SOUND_OUTPUT_HZ * target_seconds_per_frame * 2.0f);
+   sound.max_sample_count = win32_initialize_wasapi(SOUND_OUTPUT_HZ, requested_sample_count);
+   if(sound.max_sample_count != requested_sample_count)
+   {
+      platform_log("WARNING: WASAPI did not provide the requested number of samples (%u / %u).\n",
+                   sound.max_sample_count, requested_sample_count);
+   }
 
    u32 bytes_per_sample = 2 * sizeof(s16);
    sound.samples = VirtualAlloc(0, sound.max_sample_count * bytes_per_sample, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
@@ -866,14 +873,9 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       platform_log("ERROR: Windows failed to allocate the sound samples.\n");
       return(1);
    }
-   IAudioClient_Start(win32_global_sound_client);
 
-   u32 target_frames_per_second = 60;
-   float target_seconds_per_frame = 1.0f / target_frames_per_second;
-   float frame_seconds_elapsed = 0;
-
-   u32 frame_latency_count = 5;
-   u32 sample_latency_count = frame_latency_count * sound.samples_per_second / target_frames_per_second;
+   u32 frame_latency_count = 2;
+   u32 sample_latency_count = frame_latency_count * SOUND_OUTPUT_HZ / target_frames_per_second;
 
    LARGE_INTEGER frame_start_count;
    QueryPerformanceCounter(&frame_start_count);
@@ -903,7 +905,7 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       }
 
       // NOTE(law): Determine how many sound samples to write this frame.
-      sound.sample_count = win32_compute_sound_sample_count(sound.max_sample_count, sample_latency_count);
+      sound.frame_sample_count = win32_compute_sound_sample_count(sound.max_sample_count, sample_latency_count);
 
       // NOTE(law): Update game state.
       game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
@@ -914,8 +916,16 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       win32_display_bitmap(bitmap, window, device_context);
       ReleaseDC(window, device_context);
 
+      // NOTE(law): Start audio once the buffer is filled, if it has not already started.
+      static bool audio_has_started = false;
+      if(!audio_has_started)
+      {
+         audio_has_started = true;
+         IAudioClient_Start(win32_global_sound_client);
+      }
+
       // NOTE(law): Fill sound buffer.
-      win32_output_sound(sound.samples, sound.sample_count);
+      win32_output_sound(sound.samples, sound.frame_sample_count);
 
       // NOTE(law): Calculate elapsed frame time.
       LARGE_INTEGER frame_end_count;

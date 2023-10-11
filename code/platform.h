@@ -191,6 +191,10 @@ function PLATFORM_TIMER_END(platform_timer_end);
 #define RESOLUTION_BASE_WIDTH (SCREEN_TILE_COUNT_X * TILE_DIMENSION_PIXELS)
 #define RESOLUTION_BASE_HEIGHT (SCREEN_TILE_COUNT_Y * TILE_DIMENSION_PIXELS)
 
+#define SOUND_OUTPUT_HZ 48000
+#define SOUND_OUTPUT_CHANNEL_COUNT 2
+#define SOUND_OUTPUT_BYTES_PER_SAMPLE (SOUND_OUTPUT_CHANNEL_COUNT * sizeof(s16))
+
 struct game_memory
 {
    size_t size;
@@ -199,11 +203,21 @@ struct game_memory
 
 struct game_sound_output
 {
-   u32 samples_per_second;
    u32 max_sample_count;
-
-   u32 sample_count;
+   u32 frame_sample_count;
    s16 *samples;
+};
+
+struct game_sound
+{
+   u32 sample_count;
+   s16 *samples[SOUND_OUTPUT_CHANNEL_COUNT];
+};
+
+struct game_playing_sound
+{
+   u32 samples_played;
+   struct game_sound *sound;
 };
 
 struct render_bitmap

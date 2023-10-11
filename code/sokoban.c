@@ -153,6 +153,12 @@ struct game_state
    struct render_bitmap wall[WALL_TYPE_COUNT];
    struct render_bitmap goal;
 
+   struct game_sound sine_sound;
+   struct game_sound push_sound;
+
+   u32 playing_sound_count;
+   struct game_playing_sound playing_sounds[16];
+
    u32 grass_cell_dimension;
    u32 grass_grid_width;
    u32 grass_grid_height;
@@ -321,6 +327,123 @@ function void load_font(struct font_glyphs *font, struct memory_arena *arena, ch
    }
 
    platform_free_file(&file);
+}
+
+#pragma pack(push, 1)
+struct riff_chunk_header
+{
+   union
+   {
+      u32 chunk_id;
+      char chunk_id_characters[4];
+   };
+   u32 chunk_size;
+};
+
+struct riff_chunk_master
+{
+   u32 wave_id;
+};
+
+struct riff_chunk_fmt
+{
+   u16 format_tag;
+   u16 channel_count;
+   u32 samples_per_second;
+   u32 average_bytes_per_second;
+   u16 block_align;
+   u16 bits_per_sample;
+   // u16 size;
+   // u16 valid_bits_per_sample;
+   // u32 channel_mask;
+   // u8 sub_format[16];
+};
+
+struct riff_chunk_data
+{
+   s16 samples[1];
+};
+#pragma pack(pop)
+
+enum riff_chunk_type
+{
+   // NOTE(law): Type characters are stored in little-endian order, so the
+   // character literals are reversed.
+
+   RIFF_CHUNK_MASTER = 'FFIR',
+   RIFF_CHUNK_FMT    = ' tmf',
+   RIFF_CHUNK_DATA   = 'atad',
+};
+
+function struct game_sound load_wave(struct memory_arena *arena, char *file_path)
+{
+   struct game_sound result = {0};
+
+   struct platform_file file = platform_load_file(file_path);
+   if(file.size > 0)
+   {
+      struct riff_chunk_header *header = (struct riff_chunk_header *)file.memory;
+
+      u8 *last_byte = (u8 *)(header + 1) + header->chunk_size;
+      while((u8 *)header < last_byte)
+      {
+         switch(header->chunk_id)
+         {
+            case RIFF_CHUNK_MASTER:
+            {
+               struct riff_chunk_master *chunk = (struct riff_chunk_master *)(header + 1);
+               assert(chunk->wave_id == 'EVAW'); // WAVE (little endian)
+
+               header = (struct riff_chunk_header *)(chunk + 1);
+            } break;
+
+            case RIFF_CHUNK_FMT:
+            {
+               struct riff_chunk_fmt *chunk = (struct riff_chunk_fmt *)(header + 1);
+
+               // TODO(law): Our definition of sample seems to disagree with the
+               // RIFF naming scheme (i.e. does the sample size refer to a
+               // single channel or the sum of all channels?).
+
+               assert(chunk->format_tag == 0x0001); // PCM
+               assert(chunk->channel_count == SOUND_OUTPUT_CHANNEL_COUNT);
+               assert(chunk->samples_per_second == SOUND_OUTPUT_HZ);
+               assert(chunk->bits_per_sample == (SOUND_OUTPUT_BYTES_PER_SAMPLE / SOUND_OUTPUT_CHANNEL_COUNT) * 8);
+               assert(chunk->block_align == SOUND_OUTPUT_BYTES_PER_SAMPLE);
+
+               header = (struct riff_chunk_header *)(chunk + 1);
+            } break;
+
+            case RIFF_CHUNK_DATA:
+            {
+               struct riff_chunk_data *chunk = (struct riff_chunk_data *)(header + 1);
+
+               u32 bytes_per_sample = 2 * sizeof(s16);
+               result.sample_count = header->chunk_size / (ARRAY_LENGTH(result.samples) * bytes_per_sample);
+
+               result.samples[0] = ALLOCATE_SIZE(arena, bytes_per_sample * result.sample_count);
+               result.samples[1] = ALLOCATE_SIZE(arena, bytes_per_sample * result.sample_count);
+
+               for(u32 index = 0; index < result.sample_count; ++index)
+               {
+                  result.samples[0][index] = chunk->samples[(2 * index) + 0];
+                  result.samples[1][index] = chunk->samples[(2 * index) + 1];
+               }
+
+               u32 advance = (header->chunk_size + 1) & ~1;
+               header = (struct riff_chunk_header *)((u8 *)(chunk + 1) + advance);
+            } break;
+
+            default:
+            {
+               u32 advance = sizeof(header) + header->chunk_size;
+               header = (struct riff_chunk_header *)((u8 *)(header) + advance);
+            } break;
+         }
+      }
+   }
+
+   return(result);
 }
 
 function bool is_tile_position_in_bounds(u32 x, u32 y)
@@ -511,10 +634,6 @@ function bool load_level(struct game_state *gs, struct game_level *level, char *
                }
             }
          }
-
-         // NOTE(law): Compute grass placements.
-         generate_blue_noise(&gs->grass_positions, &gs->entropy, &gs->arena,
-                             gs->grass_grid_width, gs->grass_grid_height, gs->grass_cell_dimension);
 
          result = true;
       }
@@ -1263,24 +1382,102 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
    }
 }
 
-function void generate_sound_samples(struct game_sound_output *sound)
+function void play_sound(struct game_state *gs, struct game_sound *sound)
 {
-   for(u32 index = 0; index < sound->sample_count; ++index)
+   assert(gs->playing_sound_count < ARRAY_LENGTH(gs->playing_sounds));
+
+   struct game_playing_sound playing_sound = {0};
+   playing_sound.sound = sound;
+
+   gs->playing_sounds[gs->playing_sound_count++] = playing_sound;
+}
+
+function void mix_sound_samples(struct game_state *gs, struct game_sound_output *output)
+{
+   // NOTE(law): Allocate temporary buffers for summing samples values into
+   // prior to writing them out to the output sample buffer.
+   size_t watermark = gs->arena.used;
+   float *channel0_start = ALLOCATE_SIZE(&gs->arena, output->frame_sample_count * sizeof(float));
+   float *channel1_start = ALLOCATE_SIZE(&gs->arena, output->frame_sample_count * sizeof(float));
+
+   float *channel0 = channel0_start;
+   float *channel1 = channel1_start;
+
+   // NOTE(law): Clear sample buffers prior to mixing.
+   for(u32 sample_index = 0; sample_index < output->frame_sample_count; ++sample_index)
    {
+#if 0
       static float counter = 0;
-      float wave_period = sound->samples_per_second / 256.0f;
+      float wave_period = SOUND_OUTPUT_HZ / 256.0f;
 
-      float volume = 2048.0f * 4;
-      s16 sample_value = (s16)(sine(counter++ / wave_period) * volume);
-
-      sound->samples[(2 * index) + 0] = sample_value;
-      sound->samples[(2 * index) + 1] = sample_value;
+      float volume = 1024.0f * 8.0f;
+      float sample_value = sine(counter++ / wave_period) * volume;
 
       if(counter > wave_period)
       {
          counter -= wave_period;
       }
+#else
+      float sample_value = 0;
+#endif
+
+      *channel0++ = sample_value;
+      *channel1++ = sample_value;
    }
+
+   // NOTE(law): Mix samples of all currently playing sounds.
+   for(u32 sound_index = 0; sound_index < gs->playing_sound_count; ++sound_index)
+   {
+      struct game_playing_sound *playing_sound = gs->playing_sounds + sound_index;
+      struct game_sound *sound = playing_sound->sound;
+
+      channel0 = channel0_start;
+      channel1 = channel1_start;
+
+      u32 sample_write_count = output->frame_sample_count;
+      u32 playing_sound_samples_remaining = sound->sample_count - playing_sound->samples_played;
+      if(output->frame_sample_count > playing_sound_samples_remaining)
+      {
+         sample_write_count = playing_sound_samples_remaining;
+      }
+
+      u32 one_past_last_sample_index = playing_sound->samples_played + sample_write_count;
+      for(u32 sample_index = playing_sound->samples_played; sample_index < one_past_last_sample_index; ++sample_index)
+      {
+         // TODO(law): Store volume values if we ever want to handle panning.
+         *channel0++ += (float)sound->samples[0][sample_index] * 0.5f;
+         *channel1++ += (float)sound->samples[1][sample_index] * 0.5f;
+      }
+
+      playing_sound->samples_played += sample_write_count;
+      assert(playing_sound->samples_played <= playing_sound->sound->sample_count);
+   }
+
+   // NOTE(law): Remove completed sound from playing_sounds list.
+   for(u32 sound_index = 0; sound_index < gs->playing_sound_count; ++sound_index)
+   {
+      struct game_playing_sound *playing_sound = gs->playing_sounds + sound_index;
+      if(playing_sound->samples_played == playing_sound->sound->sample_count)
+      {
+         gs->playing_sounds[sound_index] = gs->playing_sounds[gs->playing_sound_count - 1];
+         gs->playing_sound_count--;
+
+         // NOTE(law): Retry this index so that the swapped in sound is also
+         // tested for completion.
+         sound_index--;
+      }
+   }
+
+   channel0 = channel0_start;
+   channel1 = channel1_start;
+
+   for(u32 index = 0; index < output->frame_sample_count; ++index)
+   {
+      output->samples[(2 * index) + 0] = (s16)(*channel0++ + 0.5f);
+      output->samples[(2 * index) + 1] = (s16)(*channel1++ + 0.5f);
+   }
+
+   gs->arena.used = watermark;
 }
 
 function GAME_UPDATE(game_update)
@@ -1308,6 +1505,14 @@ function GAME_UPDATE(game_update)
 
       gs->grass_positions.count = 0;
       gs->grass_positions.samples = ALLOCATE_SIZE(&gs->arena, gs->grass_grid_width * gs->grass_grid_height * sizeof(v2));
+
+      // TODO(law): Generate distinct grass placements for individual
+      // levels. Right now noise generation is too slow to run on each level
+      // transition without momentarily missing the target frame rate.
+
+      // NOTE(law): Compute grass placements.
+      generate_blue_noise(&gs->grass_positions, &gs->entropy, &gs->arena,
+                          gs->grass_grid_width, gs->grass_grid_height, gs->grass_cell_dimension);
 
       // NOTE(law): Allocate, load, and store levels.
       for(u32 index = 0; index < ARRAY_LENGTH(gs->levels); ++index)
@@ -1342,6 +1547,10 @@ function GAME_UPDATE(game_update)
       gs->box         = load_bitmap(&gs->arena, "../data/artwork/box.bmp");
       gs->box_on_goal = load_bitmap(&gs->arena, "../data/artwork/box_on_goal.bmp");
       gs->goal        = load_bitmap(&gs->arena, "../data/artwork/goal.bmp");
+
+      // NOTE(law): Load sound assets.
+      gs->sine_sound = load_wave(&gs->arena, "../data/sounds/sine.wav");
+      gs->push_sound = load_wave(&gs->arena, "../data/sounds/push.wav");
 
       // NOTE(law): Set animation lengths.
       gs->player_movement.seconds_duration = 0.0666666f;
@@ -1433,6 +1642,11 @@ function GAME_UPDATE(game_update)
          if(gs->movement.player_tile_delta > 0)
          {
             begin_animation(&gs->player_movement);
+
+            if(is_any_box_moving(gs))
+            {
+               play_sound(gs, &gs->push_sound);
+            }
          }
 
          // NOTE(law): Process other input interactions.
@@ -1550,7 +1764,7 @@ function GAME_UPDATE(game_update)
       }
    }
 
-   generate_sound_samples(sound);
+   mix_sound_samples(gs, sound);
 
    TIMER_END(game_update);
 }
