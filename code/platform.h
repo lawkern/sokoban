@@ -126,9 +126,11 @@ enum platform_timer_id
 {
    PLATFORM_TIMER_game_update,
    PLATFORM_TIMER_immediate_clear,
-   PLATFORM_TIMER_immediate_bitmap,
+   PLATFORM_TIMER_render_stationary_tiles_all,
+   PLATFORM_TIMER_immediate_text,
    PLATFORM_TIMER_immediate_screen_bitmap,
    PLATFORM_TIMER_generate_blue_noise,
+   PLATFORM_TIMER_mix_sound_samples,
 
    PLATFORM_TIMER_COUNT,
 };
@@ -152,7 +154,7 @@ function void print_timers(u32 frame_count)
       struct platform_timer *timer = global_platform_timers + index;
       if(timer->hits > 0)
       {
-         platform_log("TIMER %-25s %5llu hit(s) ", timer->label, timer->hits);
+         platform_log("TIMER %-30s %5llu hit(s) ", timer->label, timer->hits);
          platform_log("%10llu cy/hit, ", timer->elapsed / timer->hits);
          platform_log("%10llu cy\n", timer->elapsed);
       }

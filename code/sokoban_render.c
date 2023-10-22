@@ -145,8 +145,6 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
 function void immediate_bitmap(struct render_bitmap destination, struct render_bitmap source,
                                float posx, float posy, s32 render_width, s32 render_height)
 {
-   TIMER_BEGIN(immediate_bitmap);
-
    // NOTE(law): Assuming tile size of 32x32: when aligned to pixel boundaries,
    // x and y should range from 0 to 31 inclusive. This results in writing 32
    // pixels per row. When unaligned (say 0.5 to 31.5), the range becomes 0 to
@@ -220,8 +218,6 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
          *destination_pixel = color;
       }
    }
-
-   TIMER_END(immediate_bitmap);
 }
 
 function void immediate_tile_bitmap(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
@@ -234,6 +230,8 @@ function void immediate_tile_bitmap(struct render_bitmap destination, struct ren
 function void immediate_text(struct render_bitmap destination, struct font_glyphs *font,
                              float posx, float posy, char *format, ...)
 {
+   TIMER_BEGIN(immediate_text);
+
    char text_buffer[256];
 
    va_list arguments;
@@ -271,4 +269,6 @@ function void immediate_text(struct render_bitmap destination, struct font_glyph
          posx += pair_distance;
       }
    }
+
+   TIMER_END(immediate_text);
 }

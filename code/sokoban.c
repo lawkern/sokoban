@@ -1177,6 +1177,8 @@ function PLATFORM_QUEUE_CALLBACK(render_stationary_tiles_callback)
 
 function void render_stationary_tiles_all(struct game_state *gs, struct render_bitmap render_output, struct platform_work_queue *queue)
 {
+   TIMER_BEGIN(render_stationary_tiles_all);
+
    struct render_tile_data render_tiles[RENDER_TILE_COUNT_X * RENDER_TILE_COUNT_Y];
 
    assert((SCREEN_TILE_COUNT_X % RENDER_TILE_COUNT_X) == 0);
@@ -1227,6 +1229,8 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
       }
    }
    platform_complete_queue(queue);
+
+   TIMER_END(render_stationary_tiles_all);
 }
 
 function void title_menu(struct game_state *gs, struct render_bitmap render_output,
@@ -1394,6 +1398,8 @@ function void play_sound(struct game_state *gs, struct game_sound *sound)
 
 function void mix_sound_samples(struct game_state *gs, struct game_sound_output *output)
 {
+   TIMER_BEGIN(mix_sound_samples);
+
    // NOTE(law): Allocate temporary buffers for summing samples values into
    // prior to writing them out to the output sample buffer.
    size_t watermark = gs->arena.used;
@@ -1478,6 +1484,8 @@ function void mix_sound_samples(struct game_state *gs, struct game_sound_output 
    }
 
    gs->arena.used = watermark;
+
+   TIMER_END(mix_sound_samples);
 }
 
 function GAME_UPDATE(game_update)
