@@ -2,7 +2,7 @@
 /* (c) copyright 2023 Lawrence D. Kern /////////////////////////////////////// */
 /* /////////////////////////////////////////////////////////////////////////// */
 
-function void immediate_clear(struct render_bitmap destination, u32 color)
+function RENDERER_CLEAR(software_clear)
 {
    TIMER_BEGIN(immediate_clear);
 
@@ -25,7 +25,7 @@ function void immediate_clear(struct render_bitmap destination, u32 color)
    TIMER_END(immediate_clear);
 }
 
-function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 max, u32 color)
+function RENDERER_RECTANGLE(software_rectangle)
 {
    s32 minx = MAXIMUM(0, (s32)min.x);
    s32 miny = MAXIMUM(0, (s32)min.y);
@@ -41,30 +41,30 @@ function void immediate_rectangle(struct render_bitmap destination, v2 min, v2 m
    }
 }
 
-function void immediate_outline(struct render_bitmap destination, v2 min, v2 max, u32 color, u32 thickness)
+function void software_outline(struct render_bitmap destination, v2 min, v2 max, u32 color, u32 thickness)
 {
    // NOTE(law): Top.
    v2 top_min = {min.x, min.y};
    v2 top_max = {max.x, min.y + thickness - 1};
-   immediate_rectangle(destination, top_min, top_max, color);
+   software_rectangle(destination, top_min, top_max, color);
 
    // NOTE(law): Bottom.
    v2 bottom_min = {min.x, max.y - thickness + 1};
    v2 bottom_max = {max.x, max.y};
-   immediate_rectangle(destination, bottom_min, bottom_max, color);
+   software_rectangle(destination, bottom_min, bottom_max, color);
 
    // NOTE(law): Left.
    v2 left_min = {min.x, min.y};
    v2 left_max = {min.x + thickness - 1, max.y};
-   immediate_rectangle(destination, left_min, left_max, color);
+   software_rectangle(destination, left_min, left_max, color);
 
    // NOTE(law): Right.
    v2 right_min = {max.x - thickness + 1, min.y};
    v2 right_max = {max.x, max.y};
-   immediate_rectangle(destination, right_min, right_max, color);
+   software_rectangle(destination, right_min, right_max, color);
 }
 
-function void immediate_screen_bitmap(struct render_bitmap destination, struct render_bitmap source, float alpha_modulation)
+function RENDERER_SCREEN(software_screen)
 {
    // START:   29638612 cycles
    // CURRENT: 10728806 cycles
@@ -142,8 +142,7 @@ function void immediate_screen_bitmap(struct render_bitmap destination, struct r
    TIMER_END(immediate_screen_bitmap);
 }
 
-function void immediate_bitmap(struct render_bitmap destination, struct render_bitmap source,
-                               float posx, float posy, s32 render_width, s32 render_height)
+function RENDERER_BITMAP(software_bitmap)
 {
    // NOTE(law): Assuming tile size of 32x32: when aligned to pixel boundaries,
    // x and y should range from 0 to 31 inclusive. This results in writing 32
@@ -220,15 +219,14 @@ function void immediate_bitmap(struct render_bitmap destination, struct render_b
    }
 }
 
-function void immediate_tile_bitmap(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
+function RENDERER_TILE(software_tile)
 {
    s32 render_width = TILE_DIMENSION_PIXELS;
    s32 render_height = TILE_DIMENSION_PIXELS;
-   immediate_bitmap(destination, source, posx, posy, render_width, render_height);
+   software_bitmap(destination, source, posx, posy, render_width, render_height);
 }
 
-function void immediate_text(struct render_bitmap destination, struct font_glyphs *font,
-                             float posx, float posy, char *format, ...)
+function RENDERER_TEXT(software_text)
 {
    TIMER_BEGIN(immediate_text);
 
@@ -258,7 +256,7 @@ function void immediate_text(struct render_bitmap destination, struct font_glyph
       s32 render_width  = (source.width - 2) * TILE_BITMAP_SCALE;
       s32 render_height = (source.height - 2) * TILE_BITMAP_SCALE;
 
-      immediate_bitmap(destination, source, minx, miny, render_width, render_height);
+      software_bitmap(destination, source, minx, miny, render_width, render_height);
 
       char next_codepoint = *text;
       if(next_codepoint)

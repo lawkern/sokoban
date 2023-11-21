@@ -928,12 +928,22 @@ int main(int argument_count, char **arguments)
    }
 
    // NOTE(law) Set up the rendering bitmap.
-   struct render_bitmap bitmap = {RESOLUTION_BASE_WIDTH, RESOLUTION_BASE_HEIGHT};
+   struct game_renderer renderer = {0};
+   renderer.clear = software_clear;
+   renderer.rectangle = software_rectangle;
+   renderer.outline = software_outline;
+   renderer.bitmap  = software_bitmap;
+   renderer.tile = software_tile;
+   renderer.screen = software_screen;
+   renderer.text = software_text;
+
+   renderer.output.width = RESOLUTION_BASE_WIDTH;
+   renderer.output.height = RESOLUTION_BASE_HEIGHT;
 
    size_t bytes_per_pixel = sizeof(u32);
-   size_t bitmap_size = bitmap.width * bitmap.height * bytes_per_pixel;
-   bitmap.memory = linux_allocate(bitmap_size);
-   if(!bitmap.memory)
+   size_t bitmap_size = renderer.output.width * renderer.output.height * bytes_per_pixel;
+   renderer.output.memory = linux_allocate(bitmap_size);
+   if(!renderer.output.memory)
    {
       platform_log("ERROR: Linux failed to allocate the render bitmap.\n");
       return(1);
@@ -941,7 +951,7 @@ int main(int argument_count, char **arguments)
 
    // NOTE(law): Initialize the global display here.
    linux_global_display = XOpenDisplay(0);
-   Window window = linux_initialize_opengl(bitmap);
+   Window window = linux_initialize_opengl(renderer.output);
 
    // NOTE(law): Initialize game memory.
    struct game_memory memory = {0};
@@ -951,11 +961,21 @@ int main(int argument_count, char **arguments)
    // NOTE(law): Initialize game input.
    struct game_input input = {0};
 
+   u32 target_frames_per_second = 60;
+   float target_seconds_per_frame = 1.0f / target_frames_per_second;
+   float frame_seconds_elapsed = 0;
+
    // NOTE(law): Initialize sound output.
    struct game_sound_output sound = {0};
+   sound.max_sample_count = (u32)(SOUND_OUTPUT_HZ * target_seconds_per_frame * 2.0f);
 
-   float target_seconds_per_frame = 1.0f / 60.0f;
-   float frame_seconds_elapsed = 0;
+   u32 bytes_per_sample = 2 * sizeof(s16);
+   sound.samples = linux_allocate(sound.max_sample_count * bytes_per_sample);
+   if(!sound.samples)
+   {
+      platform_log("ERROR: Linux failed to allocate the sound samples.\n");
+      return(1);
+   }
 
    struct timespec frame_start_count;
    clock_gettime(CLOCK_MONOTONIC, &frame_start_count);
@@ -975,11 +995,11 @@ int main(int argument_count, char **arguments)
       linux_process_events(window, &input);
 
       // NOTE(law): Update game state.
-      game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
+      game_update(memory, &renderer, &input, &sound, &queue, frame_seconds_elapsed);
       // game_update(memory, bitmap, &input, &sound, &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
-      linux_display_bitmap(window, bitmap);
+      linux_display_bitmap(window, renderer.output);
 
       // NOTE(law): Calculate elapsed frame time.
       struct timespec frame_end_count;
@@ -1004,7 +1024,7 @@ int main(int argument_count, char **arguments)
       }
       frame_start_count = frame_end_count;
 
-#if DEVELOPMENT_BUILD
+#if DEVELOPMENT_BUILD && 1
       static u32 frame_count;
       if((frame_count++ % 30) == 0)
       {

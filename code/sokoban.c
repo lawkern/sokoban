@@ -24,18 +24,6 @@ function void *allocate(struct memory_arena *arena, size_t size)
    return(result);
 }
 
-#define COMPUTE_FONT_HEIGHT(font, scale) (((font).ascent - (font).descent + (font).line_gap) * (scale))
-
-struct font_glyphs
-{
-   float ascent;
-   float descent;
-   float line_gap;
-
-   struct render_bitmap glyphs[128];
-   float *pair_distances;
-};
-
 #include "sokoban_math.c"
 #include "sokoban_random.c"
 #include "sokoban_render.c"
@@ -986,7 +974,7 @@ function void save_game(struct game_state *gs)
    data.level_index = gs->level_index;
    data.level = *gs->levels[gs->level_index];
 
-         // NOTE(law): Save undo information.
+   // NOTE(law): Save undo information.
    data.undo_index = gs->undo_index;
    data.undo_count = gs->undo_count;
    for(u32 index = 0; index < ARRAY_LENGTH(gs->undos); ++index)
@@ -1094,7 +1082,7 @@ function bool is_level_complete(struct game_state *gs)
 
 struct render_tile_data
 {
-   struct render_bitmap render_output;
+   struct game_renderer *renderer;
    struct game_state *gs;
 
    u32 min_tilex;
@@ -1103,10 +1091,11 @@ struct render_tile_data
    u32 max_tiley;
 };
 
-function void render_stationary_tiles(struct render_bitmap render_output, struct game_state *gs,
+function void render_stationary_tiles(struct game_renderer *renderer, struct game_state *gs,
                                       u32 min_tilex, u32 min_tiley, u32 max_tilex, u32 max_tiley)
 {
    struct game_level *level = gs->levels[gs->level_index];
+   struct render_bitmap render_output = renderer->output;
 
    for(u32 tiley = min_tiley; tiley <= max_tiley; ++tiley)
    {
@@ -1122,7 +1111,7 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
          // occluded anyway.
 
          struct tile_attributes attributes = level->attributes[tiley][tilex];
-         // immediate_tile_bitmap(render_output, gs->floor[attributes.floor_index], x, y);
+         // renderer->tile(output, gs->floor[attributes.floor_index], x, y);
 
          enum tile_type type = level->map.tiles[tiley][tilex];
          switch(type)
@@ -1131,7 +1120,7 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
             {
                if(!is_this_box_moving(gs, tilex, tiley))
                {
-                  immediate_tile_bitmap(render_output, gs->box, x, y);
+                  renderer->tile(render_output, gs->box, x, y);
                }
             } break;
 
@@ -1139,23 +1128,23 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
             {
                if(!is_this_box_moving(gs, tilex, tiley))
                {
-                  immediate_tile_bitmap(render_output, gs->box_on_goal, x, y);
+                  renderer->tile(render_output, gs->box_on_goal, x, y);
                }
                else
                {
-                  immediate_tile_bitmap(render_output, gs->goal, x, y);
+                  renderer->tile(render_output, gs->goal, x, y);
                }
             } break;
 
             case TILE_TYPE_WALL:
             {
-               immediate_tile_bitmap(render_output, gs->wall[attributes.wall_index], x, y);
+               renderer->tile(render_output, gs->wall[attributes.wall_index], x, y);
             } break;
 
             case TILE_TYPE_GOAL:
             case TILE_TYPE_PLAYER_ON_GOAL:
             {
-               immediate_tile_bitmap(render_output, gs->goal, x, y);
+               renderer->tile(render_output, gs->goal, x, y);
             } break;
 
             default:
@@ -1170,16 +1159,17 @@ function void render_stationary_tiles(struct render_bitmap render_output, struct
 function PLATFORM_QUEUE_CALLBACK(render_stationary_tiles_callback)
 {
    struct render_tile_data *render_tile = (struct render_tile_data *)data;
-   render_stationary_tiles(render_tile->render_output, render_tile->gs,
+   render_stationary_tiles(render_tile->renderer, render_tile->gs,
                            render_tile->min_tilex, render_tile->min_tiley,
                            render_tile->max_tilex, render_tile->max_tiley);
 }
 
-function void render_stationary_tiles_all(struct game_state *gs, struct render_bitmap render_output, struct platform_work_queue *queue)
+function void render_stationary_tiles_all(struct game_state *gs, struct game_renderer *renderer, struct platform_work_queue *queue)
 {
    TIMER_BEGIN(render_stationary_tiles_all);
 
    struct render_tile_data render_tiles[RENDER_TILE_COUNT_X * RENDER_TILE_COUNT_Y];
+   struct render_bitmap render_output = renderer->output;
 
    assert((SCREEN_TILE_COUNT_X % RENDER_TILE_COUNT_X) == 0);
    assert((SCREEN_TILE_COUNT_Y % RENDER_TILE_COUNT_Y) == 0);
@@ -1191,17 +1181,17 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
       // Center:
       v2 min = gs->grass_positions.samples[index];
       v2 max = {min.x + 1, min.y + 1};
-      immediate_rectangle(render_output, min, max, 0xFF3F3F74);
+      renderer->rectangle(render_output, min, max, 0xFF3F3F74);
 
       // Left blade:
       min = (v2){min.x - 2, min.y - 2};
       max = (v2){min.x + 1, min.y + 1};
-      immediate_rectangle(render_output, min, max, 0xFF3F3F74);
+      renderer->rectangle(render_output, min, max, 0xFF3F3F74);
 
       // Right blade:
       min = (v2){min.x + 4, min.y};
       max = (v2){min.x + 1, min.y + 1};
-      immediate_rectangle(render_output, min, max, 0xFF3F3F74);
+      renderer->rectangle(render_output, min, max, 0xFF3F3F74);
    }
 
    u32 tile_index = 0;
@@ -1218,7 +1208,7 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
          u32 min_tilex = TILES_PER_RENDER_TILE_X * x;
          u32 max_tilex = MINIMUM(min_tilex + TILES_PER_RENDER_TILE_X - 1, SCREEN_TILE_COUNT_X - 1);
 
-         data->render_output = render_output;
+         data->renderer = renderer;
          data->gs = gs;
          data->min_tilex = min_tilex;
          data->min_tiley = min_tiley;
@@ -1233,27 +1223,28 @@ function void render_stationary_tiles_all(struct game_state *gs, struct render_b
    TIMER_END(render_stationary_tiles_all);
 }
 
-function void title_menu(struct game_state *gs, struct render_bitmap render_output,
+function void title_menu(struct game_state *gs, struct game_renderer *renderer,
                          struct game_input *input, struct platform_work_queue *queue)
 {
    if(was_pressed(input->confirm))
    {
       gs->menu_state = MENU_STATE_NONE;
-      begin_level_transition(gs, render_output);
+      begin_level_transition(gs, renderer->output);
    }
 
-   immediate_clear(render_output, 0xFF222034);
-   render_stationary_tiles_all(gs, render_output, queue);
+   struct render_bitmap render_output = renderer->output;
+   renderer->clear(render_output, 0xFF222034);
+   render_stationary_tiles_all(gs, renderer, queue);
 
    float posx = TILE_DIMENSION_PIXELS * 0.5f;
    float posy = (float)render_output.height - TILE_DIMENSION_PIXELS;
    float height = (gs->font.ascent - gs->font.descent + gs->font.line_gap) * TILE_BITMAP_SCALE * 1.35f;
 
-   immediate_text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <Enter> to start");
-   immediate_text(render_output, &gs->font, posx, posy - 1.25f*height, "SOKOBAN 2023 (WORKING TITLE)");
+   renderer->text(render_output, &gs->font, posx, posy - 0.25f*height, "Press <Enter> to start");
+   renderer->text(render_output, &gs->font, posx, posy - 1.25f*height, "SOKOBAN 2023 (WORKING TITLE)");
 }
 
-function void pause_menu(struct game_state *gs, struct render_bitmap render_output, struct game_input *input)
+function void pause_menu(struct game_state *gs, struct game_renderer *renderer, struct game_input *input)
 {
    if(was_pressed(input->pause) || was_pressed(input->confirm))
    {
@@ -1272,8 +1263,9 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
       gs->level_index = (gs->level_index == gs->level_count - 1) ? 0 : gs->level_index + 1;
    }
 
-   immediate_clear(render_output, 0xFF222034);
-   immediate_screen_bitmap(render_output, gs->snapshot, 0.1f);
+   struct render_bitmap render_output = renderer->output;
+   renderer->clear(render_output, 0xFF222034);
+   renderer->screen(render_output, gs->snapshot, 0.1f);
 
    // NOTE(law): Display menu sections.
    static char *game_controls[] =
@@ -1320,23 +1312,23 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
       assert(entry_count > 0);
 
       // NOTE(law): Display the section header text outside the border.
-      immediate_text(render_output, &gs->font, textx, texty, entries[0]);
+      renderer->text(render_output, &gs->font, textx, texty, entries[0]);
       texty += line_height;
 
       v2 section_min = {textx, texty};
       for(u32 entry_index = 1; entry_index < entry_count; ++entry_index)
       {
-         immediate_text(render_output, &gs->font, textx + section_padding, texty + section_padding, entries[entry_index]);
+         renderer->text(render_output, &gs->font, textx + section_padding, texty + section_padding, entries[entry_index]);
          texty += line_height;
       }
       v2 section_max = {render_output.width - section_margin_x, texty + (2.0f * section_padding)};
-      immediate_outline(render_output, section_min, section_max, border_color, border_thickness);
+      renderer->outline(render_output, section_min, section_max, border_color, border_thickness);
 
       texty += (2.0f * section_margin_y) + (2.0f * section_padding);
    }
 
    // NOTE(law): Fill remaining space with level selection.
-   immediate_text(render_output, &gs->font, textx, texty, "LEVELS");
+   renderer->text(render_output, &gs->font, textx, texty, "LEVELS");
    texty += line_height;
 
    float remaining_section_height = render_output.height - texty - section_margin_y - section_padding;
@@ -1359,13 +1351,13 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
       {
          struct game_level *level = gs->levels[level_index];
          char *format = (level_index == gs->level_index) ? "->%02d. %s" : "  %02d. %s";
-         immediate_text(render_output, &gs->font, textx + section_padding, texty + section_padding,
+         renderer->text(render_output, &gs->font, textx + section_padding, texty + section_padding,
                         format, level_index + 1, level->name);
       }
       texty += line_height;
    }
    v2 section_max = {render_output.width - section_margin_x, texty + (2.0f * section_padding)};
-   immediate_outline(render_output, section_min, section_max, border_color, border_thickness);
+   renderer->outline(render_output, section_min, section_max, border_color, border_thickness);
 
    // NOTE(law): If all levels don't fit onscreen, draw a scrollbar.
    if(visible_level_count < gs->level_count)
@@ -1382,7 +1374,7 @@ function void pause_menu(struct game_state *gs, struct render_bitmap render_outp
 
       v2 scroll_max = {section_max.x - section_padding, scrollbar_maxy};
       v2 scroll_min = {scroll_max.x - scrollbar_width, scrollbar_miny};
-      immediate_rectangle(render_output, scroll_min, scroll_max, border_color);
+      renderer->rectangle(render_output, scroll_min, scroll_max, border_color);
    }
 }
 
@@ -1412,7 +1404,7 @@ function void mix_sound_samples(struct game_state *gs, struct game_sound_output 
    // NOTE(law): Clear sample buffers prior to mixing.
    for(u32 sample_index = 0; sample_index < output->frame_sample_count; ++sample_index)
    {
-#if 0
+#if 1
       static float counter = 0;
       float wave_period = SOUND_OUTPUT_HZ / 256.0f;
 
@@ -1491,6 +1483,8 @@ function void mix_sound_samples(struct game_state *gs, struct game_sound_output 
 function GAME_UPDATE(game_update)
 {
    TIMER_BEGIN(game_update);
+
+   struct render_bitmap render_output = renderer->output;
 
    struct game_state *gs = (struct game_state *)memory.base_address;
    if(!gs->is_initialized)
@@ -1592,12 +1586,12 @@ function GAME_UPDATE(game_update)
    if(gs->menu_state == MENU_STATE_TITLE)
    {
       // NOTE(law): Display title menu and early out.
-      title_menu(gs, render_output, input, queue);
+      title_menu(gs, renderer, input, queue);
    }
    else if(gs->menu_state == MENU_STATE_PAUSE)
    {
       // NOTE(law): Display pause menu and early out.
-      pause_menu(gs, render_output, input);
+      pause_menu(gs, renderer, input);
    }
    else if(was_pressed(input->pause))
    {
@@ -1677,10 +1671,10 @@ function GAME_UPDATE(game_update)
       }
 
       // NOTE(law): Clear the screen each frame.
-      immediate_clear(render_output, 0xFF222034);
+      renderer->clear(render_output, 0xFF222034);
 
       // NOTE(law): First render pass for non-animating objects.
-      render_stationary_tiles_all(gs, render_output, queue);
+      render_stationary_tiles_all(gs, renderer, queue);
 
       // NOTE(law): Second render pass for animating objects.
       float playerx = (float)level->map.player_tilex * TILE_DIMENSION_PIXELS;
@@ -1731,36 +1725,36 @@ function GAME_UPDATE(game_update)
             enum tile_type previous = level->map.tiles[initial_box_tiley][initial_box_tilex];
             if(previous == TILE_TYPE_GOAL || previous == TILE_TYPE_PLAYER_ON_GOAL)
             {
-               immediate_tile_bitmap(render_output, gs->box_on_goal, boxx, boxy);
+               renderer->tile(render_output, gs->box_on_goal, boxx, boxy);
             }
             else
             {
-               immediate_tile_bitmap(render_output, gs->box, boxx, boxy);
+               renderer->tile(render_output, gs->box, boxx, boxy);
             }
          }
       }
 
-      immediate_tile_bitmap(render_output, gs->player, playerx, playery);
+      renderer->tile(render_output, gs->player, playerx, playery);
 
       // NOTE(law): Render UI.
       float line_height = COMPUTE_FONT_HEIGHT(gs->font, TILE_BITMAP_SCALE);
       float textx = 0.5f * TILE_DIMENSION_PIXELS;
       float texty = 0.5f * line_height;
 
-      immediate_text(render_output, &gs->font, textx, texty, "%s", level->name);
+      renderer->text(render_output, &gs->font, textx, texty, "%s", level->name);
       texty += line_height;
 
-      immediate_text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);
+      renderer->text(render_output, &gs->font, textx, texty, "Move Count: %u", level->move_count);
       texty += line_height;
 
-      immediate_text(render_output, &gs->font, textx, texty, "Push Count: %u", level->push_count);
+      renderer->text(render_output, &gs->font, textx, texty, "Push Count: %u", level->push_count);
       texty += line_height;
 
       // NOTE(law): Render level transition overlay.
       if(is_animating(&gs->level_transition))
       {
          float alpha = gs->level_transition.seconds_remaining / gs->level_transition.seconds_duration;
-         immediate_screen_bitmap(render_output, gs->snapshot, alpha);
+         renderer->screen(render_output, gs->snapshot, alpha);
       }
 
       // TODO(law): Checking for level completion at the end of the frame prevents

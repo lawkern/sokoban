@@ -26,6 +26,14 @@ typedef uint64_t u64;
 typedef int16_t s16;
 typedef int32_t s32;
 
+typedef struct
+{
+   float x;
+   float y;
+} v2;
+
+#include "renderer.h"
+
 function void zero_memory(void *memory, size_t size)
 {
    // TODO(law): Speed this up!!
@@ -222,17 +230,6 @@ struct game_playing_sound
    struct game_sound *sound;
 };
 
-struct render_bitmap
-{
-   s32 width;
-   s32 height;
-
-   s32 offsetx;
-   s32 offsety;
-
-   u32 *memory;
-};
-
 struct game_input
 {
    union
@@ -267,7 +264,7 @@ struct game_input
 };
 
 #define GAME_UPDATE(name) void name(struct game_memory memory,          \
-                                    struct render_bitmap render_output, \
+                                    struct game_renderer *renderer,     \
                                     struct game_input *input,           \
                                     struct game_sound_output *sound,    \
                                     struct platform_work_queue *queue,  \

@@ -5,12 +5,6 @@
 // TODO(law): Remove dependency on math.h!
 #include <math.h>
 
-typedef struct
-{
-   float x;
-   float y;
-} v2;
-
 #define TAU32 6.2831853f
 #define ROOT2 1.41421356f
 
