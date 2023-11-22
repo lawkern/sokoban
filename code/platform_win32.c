@@ -6,14 +6,19 @@
 
 #define COBJMACROS
 #include <initguid.h>
+
+// NOTE(law): Audio headers.
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 
+// NOTE(law): Standard headers.
 #include <stdio.h>
 
 typedef HANDLE platform_semaphore;
 #include "platform.h"
+
 #include "sokoban.c"
+#include "renderer_software.c"
 
 #define WIN32_LOG_MAX_LENGTH 1024
 #define WIN32_DEFAULT_DPI 96
@@ -44,15 +49,15 @@ global HANDLE win32_global_small_icon24;
 #if DEVELOPMENT_BUILD
 function PLATFORM_TIMER_BEGIN(platform_timer_begin)
 {
-   global_platform_timers[id].id = id;
-   global_platform_timers[id].label = label;
-   global_platform_timers[id].start = __rdtsc();
+   global_platform_profiler.timers[id].id = id;
+   global_platform_profiler.timers[id].label = label;
+   global_platform_profiler.timers[id].start = __rdtsc();
 }
 
 function PLATFORM_TIMER_END(platform_timer_end)
 {
-   global_platform_timers[id].elapsed += (__rdtsc() - global_platform_timers[id].start);
-   global_platform_timers[id].hits++;
+   global_platform_profiler.timers[id].elapsed += (__rdtsc() - global_platform_profiler.timers[id].start);
+   global_platform_profiler.timers[id].hits++;
 }
 #endif
 
@@ -813,12 +818,19 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    }
 
    // NOTE(law) Set up the rendering bitmap.
-   struct render_bitmap bitmap = {RESOLUTION_BASE_WIDTH, RESOLUTION_BASE_HEIGHT};
+   struct game_renderer renderer = {0};
+   renderer.clear = software_clear;
+   renderer.rectangle = software_rectangle;
+   renderer.bitmap  = software_bitmap;
+   renderer.screen = software_screen;
+
+   renderer.output.width = RESOLUTION_BASE_WIDTH;
+   renderer.output.height = RESOLUTION_BASE_HEIGHT;
 
    SIZE_T bytes_per_pixel = sizeof(u32);
-   SIZE_T bitmap_size = bitmap.width * bitmap.height * bytes_per_pixel;
-   bitmap.memory = VirtualAlloc(0, bitmap_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
-   if(!bitmap.memory)
+   SIZE_T bitmap_size = renderer.output.width * renderer.output.height * bytes_per_pixel;
+   renderer.output.memory = VirtualAlloc(0, bitmap_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+   if(!renderer.output.memory)
    {
       platform_log("ERROR: Windows failed to allocate the render bitmap.\n");
       return(1);
@@ -827,15 +839,15 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
    // NOTE(law): Initialize render bitmap.
    BITMAPINFOHEADER bitmap_header = {0};
    bitmap_header.biSize = sizeof(BITMAPINFOHEADER);
-   bitmap_header.biWidth = bitmap.width;
-   bitmap_header.biHeight = -(s32)bitmap.height; // NOTE(law): Negative will indicate a top-down bitmap.
+   bitmap_header.biWidth = renderer.output.width;
+   bitmap_header.biHeight = -(s32)renderer.output.height; // NOTE(law): Negative will indicate a top-down bitmap.
    bitmap_header.biPlanes = 1;
    bitmap_header.biBitCount = 32;
    bitmap_header.biCompression = BI_RGB;
 
    BITMAPINFO bitmap_info = {bitmap_header};
 
-   win32_global_bitmap = &bitmap;
+   win32_global_bitmap = &renderer.output;
    win32_global_bitmap_info = &bitmap_info;
 
    ShowWindow(window, show_command);
@@ -908,12 +920,12 @@ int WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR command_line,
       sound.frame_sample_count = win32_compute_sound_sample_count(sound.max_sample_count, sample_latency_count);
 
       // NOTE(law): Update game state.
-      game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
-      // game_update(memory, bitmap, &input, &sound &queue, target_seconds_per_frame);
+      game_update(memory, &renderer, &input, &sound, &queue, frame_seconds_elapsed);
+      // game_update(memory, &renderer, &input, &sound &queue, target_seconds_per_frame);
 
       // NOTE(law): Blit bitmap to screen.
       HDC device_context = GetDC(window);
-      win32_display_bitmap(bitmap, window, device_context);
+      win32_display_bitmap(renderer.output, window, device_context);
       ReleaseDC(window, device_context);
 
       // NOTE(law): Start audio once the buffer is filled, if it has not already started.

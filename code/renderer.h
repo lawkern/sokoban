@@ -32,31 +32,62 @@ typedef RENDERER_CLEAR(renderer_clear);
 #define RENDERER_RECTANGLE(name) void name(struct render_bitmap destination, v2 min, v2 max, u32 color)
 typedef RENDERER_RECTANGLE(renderer_rectangle);
 
-#define RENDERER_OUTLINE(name) void name(struct render_bitmap destination, v2 min, v2 max, u32 color, u32 thickness)
-typedef RENDERER_OUTLINE(renderer_outline);
-
 #define RENDERER_BITMAP(name) void name(struct render_bitmap destination, struct render_bitmap source, float posx, float posy, s32 render_width, s32 render_height)
 typedef RENDERER_BITMAP(renderer_bitmap);
-
-#define RENDERER_TILE(name) void name(struct render_bitmap destination, struct render_bitmap source, float posx, float posy)
-typedef RENDERER_TILE(renderer_tile);
 
 #define RENDERER_SCREEN(name) void name(struct render_bitmap destination, struct render_bitmap source, float alpha_modulation)
 typedef RENDERER_SCREEN(renderer_screen);
 
-#define RENDERER_TEXT(name) void name(struct render_bitmap destination, struct font_glyphs *font, float posx, float posy, char *format, ...)
-typedef RENDERER_TEXT(renderer_text);
+enum render_queue_entry_type
+{
+   RENDER_QUEUE_ENTRY_TYPE_CLEAR,
+   RENDER_QUEUE_ENTRY_TYPE_RECTANGLE,
+   RENDER_QUEUE_ENTRY_TYPE_BITMAP,
+   RENDER_QUEUE_ENTRY_TYPE_SCREEN,
+};
+
+struct render_queue_entry
+{
+   enum render_queue_entry_type type;
+
+   u32 color;
+   float alpha_modulation;
+
+   union
+   {
+      struct {v2 min; v2 max;};
+      struct {float posx; float posy; s32 width; s32 height;};
+   };
+
+   union
+   {
+      struct render_bitmap bitmap;
+      struct {struct font_glyphs *font; char *format;};
+   };
+};
+
+struct render_queue
+{
+   u32 entry_count;
+   struct render_queue_entry entries[4098];
+};
+
+enum render_layer
+{
+   RENDER_LAYER_BACKGROUND,
+   RENDER_LAYER_FOREGROUND,
+
+   RENDER_LAYER_COUNT,
+};
 
 struct game_renderer
 {
    renderer_clear *clear;
    renderer_rectangle *rectangle;
-   renderer_outline *outline;
    renderer_bitmap *bitmap;
-   renderer_tile *tile;
    renderer_screen *screen;
-   renderer_text *text;
 
+   struct render_queue queue[RENDER_LAYER_COUNT];
    struct render_bitmap output;
 };
 

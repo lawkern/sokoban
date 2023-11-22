@@ -8,8 +8,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "platform_intrinsics.h"
-
 #define function static
 #define global static
 
@@ -115,6 +113,9 @@ struct platform_input_button
    bool changed_state;
 };
 
+#include "platform_profiler.h"
+#include "platform_intrinsics.h"
+
 function bool is_pressed(struct platform_input_button button)
 {
    // NOTE(law): The specified button is currently pressed.
@@ -129,61 +130,6 @@ function bool was_pressed(struct platform_input_button button)
    return(result);
 }
 
-#if DEVELOPMENT_BUILD
-enum platform_timer_id
-{
-   PLATFORM_TIMER_game_update,
-   PLATFORM_TIMER_immediate_clear,
-   PLATFORM_TIMER_render_stationary_tiles_all,
-   PLATFORM_TIMER_immediate_text,
-   PLATFORM_TIMER_immediate_screen_bitmap,
-   PLATFORM_TIMER_generate_blue_noise,
-   PLATFORM_TIMER_mix_sound_samples,
-
-   PLATFORM_TIMER_COUNT,
-};
-
-struct platform_timer
-{
-   enum platform_timer_id id;
-   char *label;
-
-   u64 start;
-   u64 elapsed;
-   u64 hits;
-};
-
-global struct platform_timer global_platform_timers[256];
-
-function void print_timers(u32 frame_count)
-{
-   for(u32 index = 0; index < PLATFORM_TIMER_COUNT; ++index)
-   {
-      struct platform_timer *timer = global_platform_timers + index;
-      if(timer->hits > 0)
-      {
-         platform_log("TIMER %-30s %5llu hit(s) ", timer->label, timer->hits);
-         platform_log("%10llu cy/hit, ", timer->elapsed / timer->hits);
-         platform_log("%10llu cy\n", timer->elapsed);
-      }
-   }
-}
-
-#   define PLATFORM_TIMER_BEGIN(name) void name(enum platform_timer_id id, char *label)
-#   define PLATFORM_TIMER_END(name) void name(enum platform_timer_id id)
-
-function PLATFORM_TIMER_BEGIN(platform_timer_begin);
-function PLATFORM_TIMER_END(platform_timer_end);
-
-#   define RESET_TIMERS() zero_memory(global_platform_timers, sizeof(global_platform_timers))
-#   define TIMER_BEGIN(id) platform_timer_begin(PLATFORM_TIMER_##id, #id)
-#   define TIMER_END(id) platform_timer_end(PLATFORM_TIMER_##id)
-#else
-#   define RESET_TIMERS()
-#   define TIMER_BEGIN(id)
-#   define TIMER_END(id)
-#endif
-
 // NOTE(law): Game-provided constructs.
 
 #define SCREEN_TILE_COUNT_X 30
@@ -193,10 +139,10 @@ function PLATFORM_TIMER_END(platform_timer_end);
 #define TILE_BITMAP_SCALE 2
 #define TILE_DIMENSION_PIXELS (SOURCE_BITMAP_DIMENSION_PIXELS * TILE_BITMAP_SCALE)
 
-#define RENDER_TILE_COUNT_X 6
-#define RENDER_TILE_COUNT_Y 4
-#define TILES_PER_RENDER_TILE_X (SCREEN_TILE_COUNT_X / RENDER_TILE_COUNT_X)
-#define TILES_PER_RENDER_TILE_Y (SCREEN_TILE_COUNT_Y / RENDER_TILE_COUNT_Y)
+// #define RENDER_TILE_COUNT_X 6
+// #define RENDER_TILE_COUNT_Y 4
+// #define TILES_PER_RENDER_TILE_X (SCREEN_TILE_COUNT_X / RENDER_TILE_COUNT_X)
+// #define TILES_PER_RENDER_TILE_Y (SCREEN_TILE_COUNT_Y / RENDER_TILE_COUNT_Y)
 
 #define RESOLUTION_BASE_WIDTH (SCREEN_TILE_COUNT_X * TILE_DIMENSION_PIXELS)
 #define RESOLUTION_BASE_HEIGHT (SCREEN_TILE_COUNT_Y * TILE_DIMENSION_PIXELS)

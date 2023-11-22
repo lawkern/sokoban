@@ -931,11 +931,8 @@ int main(int argument_count, char **arguments)
    struct game_renderer renderer = {0};
    renderer.clear = software_clear;
    renderer.rectangle = software_rectangle;
-   renderer.outline = software_outline;
    renderer.bitmap  = software_bitmap;
-   renderer.tile = software_tile;
    renderer.screen = software_screen;
-   renderer.text = software_text;
 
    renderer.output.width = RESOLUTION_BASE_WIDTH;
    renderer.output.height = RESOLUTION_BASE_HEIGHT;
