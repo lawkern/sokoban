@@ -1334,12 +1334,13 @@ function void pause_menu(struct game_state *gs, struct game_renderer *renderer, 
 
 function void play_sound(struct game_state *gs, struct game_sound *sound)
 {
-   assert(gs->playing_sound_count < ARRAY_LENGTH(gs->playing_sounds));
+   if(gs->playing_sound_count < ARRAY_LENGTH(gs->playing_sounds))
+   {
+      struct game_playing_sound playing_sound = {0};
+      playing_sound.sound = sound;
 
-   struct game_playing_sound playing_sound = {0};
-   playing_sound.sound = sound;
-
-   gs->playing_sounds[gs->playing_sound_count++] = playing_sound;
+      gs->playing_sounds[gs->playing_sound_count++] = playing_sound;
+   }
 }
 
 function void mix_sound_samples(struct game_state *gs, struct game_sound_output *output)

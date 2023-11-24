@@ -15,7 +15,9 @@
 
 typedef dispatch_semaphore_t platform_semaphore;
 #include "platform.h"
+
 #include "sokoban.c"
+#include "renderer_software.c"
 
 #define MACOS_WORKER_THREAD_COUNT 8
 #define MACOS_LOG_MAX_LENGTH 1024
@@ -50,8 +52,8 @@ global id<MTLTexture> macos_global_textures[MACOS_MAX_FRAMES_IN_FLIGHT];
 #if DEVELOPMENT_BUILD
 function PLATFORM_TIMER_BEGIN(platform_timer_begin)
 {
-   global_platform_timers[id].id = id;
-   global_platform_timers[id].label = label;
+   global_platform_profiler.timers[id].id = id;
+   global_platform_profiler.timers[id].label = label;
 
    u64 start;
 #if TARGET_CPU_ARM64
@@ -62,7 +64,7 @@ function PLATFORM_TIMER_BEGIN(platform_timer_begin)
    #error Unsupported target CPU.
 #endif
 
-   global_platform_timers[id].start = start;
+   global_platform_profiler.timers[id].start = start;
 }
 
 function PLATFORM_TIMER_END(platform_timer_end)
@@ -76,8 +78,8 @@ function PLATFORM_TIMER_END(platform_timer_end)
    #error Unsupported target CPU.
 #endif
 
-   global_platform_timers[id].elapsed += (end - global_platform_timers[id].start);
-   global_platform_timers[id].hits++;
+   global_platform_profiler.timers[id].elapsed += (end - global_platform_profiler.timers[id].start);
+   global_platform_profiler.timers[id].hits++;
 }
 #endif
 
@@ -731,17 +733,25 @@ int main(int argument_count, char **arguments)
       [NSApp setMainMenu:menubar];
 
       // NOTE(law) Set up the rendering bitmap.
-      struct render_bitmap bitmap = {RESOLUTION_BASE_WIDTH, RESOLUTION_BASE_HEIGHT};
-      size_t bitmap_size = bitmap.width * bitmap.height * sizeof(u32);
-      bitmap.memory = mmap(0, bitmap_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
-      if(bitmap.memory == MAP_FAILED)
+      struct game_renderer renderer = {0};
+      renderer.clear = software_clear;
+      renderer.rectangle = software_rectangle;
+      renderer.bitmap  = software_bitmap;
+      renderer.screen = software_screen;
+
+      renderer.output.width = RESOLUTION_BASE_WIDTH;
+      renderer.output.height = RESOLUTION_BASE_HEIGHT;
+
+      size_t bitmap_size = renderer.output.width * renderer.output.height * sizeof(u32);
+      renderer.output.memory = mmap(0, bitmap_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+      if(renderer.output.memory == MAP_FAILED)
       {
          platform_log("ERROR: macOS failed to allocate the render bitmap.\n");
          return(1);
       }
-      macos_global_bitmap = bitmap;
+      macos_global_bitmap = renderer.output;
 
-      macos_initialize_metal(view, bitmap.width, bitmap.height);
+      macos_initialize_metal(view, renderer.output.width, renderer.output.height);
 
       // NOTE(law): Initialize game memory.
       struct game_memory memory = {0};
@@ -751,11 +761,23 @@ int main(int argument_count, char **arguments)
       // NOTE(law): Initialize game input.
       struct game_input input = {0};
 
+      u32 target_frames_per_second = 60;
+      float target_seconds_per_frame = 1.0f / target_frames_per_second;
+      float frame_seconds_elapsed = 0;
+
       // NOTE(law): Initialize sound output.
       struct game_sound_output sound = {0};
+      sound.max_sample_count = (u32)(SOUND_OUTPUT_HZ * target_seconds_per_frame * 2.0f);
 
-      float target_seconds_per_frame = 1.0f / 60.0f;
-      float frame_seconds_elapsed = 0;
+      u32 bytes_per_sample = 2 * sizeof(s16);
+      u32 samples_size = sound.max_sample_count * bytes_per_sample;
+      sound.samples = mmap(0, samples_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+      if(!sound.samples)
+      {
+         platform_log("ERROR: macOS failed to allocate the sound samples.\n");
+         return(1);
+      }
+      memset(sound.samples, 0, samples_size);
 
       u64 frame_start_count = mach_absolute_time();
 
@@ -783,7 +805,7 @@ int main(int argument_count, char **arguments)
          }
 
          // NOTE(law): Update game state.
-         game_update(memory, bitmap, &input, &sound, &queue, frame_seconds_elapsed);
+         game_update(memory, &renderer, &input, &sound, &queue, frame_seconds_elapsed);
          // game_update(memory, bitmap, &input, &sound, &queue, target_seconds_per_frame);
 
          // NOTE(law): Calculate elapsed frame time.
@@ -812,7 +834,7 @@ int main(int argument_count, char **arguments)
          }
          frame_start_count = frame_end_count;
 
-#if DEVELOPMENT_BUILD && 0
+#if DEVELOPMENT_BUILD && 1
          static u32 frame_count;
          if((frame_count++ % 30) == 0)
          {
