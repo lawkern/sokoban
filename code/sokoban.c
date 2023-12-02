@@ -431,6 +431,8 @@ function struct game_sound load_wave(struct memory_arena *arena, char *file_path
             } break;
          }
       }
+
+      platform_free_file(&file);
    }
 
    return(result);
