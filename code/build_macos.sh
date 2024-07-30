@@ -3,30 +3,20 @@
 DEVELOPMENT_BUILD=1
 
 # Compilation flags:
-COMPILER_FLAGS="-g -O0"
-COMPILER_FLAGS="${COMPILER_FLAGS} -fdiagnostics-absolute-paths"
-COMPILER_FLAGS="${COMPILER_FLAGS} -fmodules"
+COMPILER_FLAGS="-g -fdiagnostics-absolute-paths -fmodules"
 
 # Macro definitions:
 COMPILER_FLAGS="${COMPILER_FLAGS} -DDEVELOPMENT_BUILD=${DEVELOPMENT_BUILD}"
 
 # Warning flags:
-COMPILER_FLAGS="${COMPILER_FLAGS} -Werror"
-COMPILER_FLAGS="${COMPILER_FLAGS} -Wall"
+COMPILER_FLAGS="${COMPILER_FLAGS} -Wall -Werror"
 COMPILER_FLAGS="${COMPILER_FLAGS} -Wno-missing-braces"
 COMPILER_FLAGS="${COMPILER_FLAGS} -Wno-deprecated-declarations"
-
-if [[ "$DEVELOPMENT_BUILD" == 1 ]]
-then
-    COMPILER_FLAGS="${COMPILER_FLAGS} -Wno-unused-variable"
-    COMPILER_FLAGS="${COMPILER_FLAGS} -Wno-unused-function"
-fi
+COMPILER_FLAGS="${COMPILER_FLAGS} -Wno-unused-variable"
+COMPILER_FLAGS="${COMPILER_FLAGS} -Wno-unused-function"
 
 # Linker flags and frameworks:
-LINKER_FLAGS="-lm -ldl"
-LINKER_FLAGS="${LINKER_FLAGS} -framework Cocoa"
-LINKER_FLAGS="${LINKER_FLAGS} -framework Metal"
-LINKER_FLAGS="${LINKER_FLAGS} -framework MetalKit"
+LINKER_FLAGS="-lm -ldl -framework Cocoa -framework Metal -framework MetalKit"
 
 mkdir -p ../build
 pushd ../build > /dev/null
@@ -36,10 +26,14 @@ pushd ../build > /dev/null
 # xcrun -sdk macosx metallib sokoban.air -o sokoban.metallib
 
 # Executable compilation:
-clang ../code/platform_macos.m $COMPILER_FLAGS -target arm64-apple-macos11     -o sokoban_arm $LINKER_FLAGS
-clang ../code/platform_macos.m $COMPILER_FLAGS -target x86_64-apple-macos10.12 -o sokoban_x64 $LINKER_FLAGS
+clang ../code/platform_macos_main.m -O0 -DDEVELOPMENT_BUILD=1 $COMPILER_FLAGS -target arm64-apple-macos11     -o sokoban_arm_debug $LINKER_FLAGS
+clang ../code/platform_macos_main.m -O0 -DDEVELOPMENT_BUILD=1 $COMPILER_FLAGS -target x86_64-apple-macos10.12 -o sokoban_x64_debug $LINKER_FLAGS
+lipo -create -output sokoban_debug sokoban_arm_debug sokoban_x64_debug
 
-lipo -create -output sokoban sokoban_arm sokoban_x64
+clang ../code/platform_macos_main.m -O2 -DDEVELOPMENT_BUILD=0 $COMPILER_FLAGS -target arm64-apple-macos11     -o sokoban_arm_release $LINKER_FLAGS
+clang ../code/platform_macos_main.m -O2 -DDEVELOPMENT_BUILD=0 $COMPILER_FLAGS -target x86_64-apple-macos10.12 -o sokoban_x64_release $LINKER_FLAGS
+lipo -create -output sokoban_release sokoban_arm_release sokoban_x64_release
+
 
 # TODO(law): Generate the standard macOS application bundle.
 
